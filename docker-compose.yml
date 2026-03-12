@@ -1,0 +1,209 @@
+version: "3.8"
+
+services:
+  # =========================================================================
+  # INFRASTRUCTURE
+  # =========================================================================
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: multi_platform_bot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # GATEWAY (WhatsApp webhook receiver + message router)
+  # =========================================================================
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================================================================
+  # PAYMENT SERVER (Stripe webhooks)
+  # =========================================================================
+  payment:
+    build:
+      context: .
+      dockerfile: Dockerfile.payment
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "5000:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================================================================
+  # LINKEDIN WORKER (Selenium — heavy, 1 concurrency)
+  # =========================================================================
+  worker-linkedin:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    command: >
+      celery -A workers.celery_app:celery_app worker
+      --loglevel=info --concurrency=1
+      -Q linkedin_posting,linkedin_engagement
+      -n linkedin@%h
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================================================================
+  # FACEBOOK WORKER (Graph API — lightweight, higher concurrency)
+  # =========================================================================
+  worker-facebook:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway  # No Chrome needed
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    command: >
+      celery -A workers.celery_app:celery_app worker
+      --loglevel=info --concurrency=4
+      -Q facebook_posting,facebook_engagement
+      -n facebook@%h
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================================================================
+  # INSTAGRAM WORKER (Graph API — lightweight)
+  # =========================================================================
+  worker-instagram:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway  # No Chrome needed
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    command: >
+      celery -A workers.celery_app:celery_app worker
+      --loglevel=info --concurrency=4
+      -Q instagram_posting,instagram_engagement
+      -n instagram@%h
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================================================================
+  # NOTIFICATION WORKER (WhatsApp message sending)
+  # =========================================================================
+  worker-notifications:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway  # No Chrome needed
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    command: >
+      celery -A workers.celery_app:celery_app worker
+      --loglevel=info --concurrency=4
+      -Q notifications
+      -n notifications@%h
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # =========================================================================
+  # CADDY (Reverse proxy with auto-HTTPS)
+  # =========================================================================
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - gateway
+      - payment
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

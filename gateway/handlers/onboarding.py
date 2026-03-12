@@ -1,0 +1,110 @@
+"""
+Onboarding and help handlers.
+Guides new users through profile setup (industry, skills, goals, tone).
+"""
+
+import logging
+from shared.database import BotDatabase
+from gateway.conversation import ConversationState
+from gateway import whatsapp_client as wa
+
+logger = logging.getLogger(__name__)
+
+
+async def handle_start(db: BotDatabase, sender: str, text: str):
+    """Welcome message and start onboarding."""
+    user = db.get_user(sender)
+    profile = db.get_user_profile(sender)
+
+    if profile:
+        await wa.send_text(
+            sender,
+            "Welcome back! You're already set up.\n\n"
+            "Send *help* to see what I can do, or *credits* to check your balance.",
+        )
+        return
+
+    await wa.send_text(
+        sender,
+        "Welcome to *Multi-Platform Automation Bot*!\n\n"
+        "I can automate your social media presence on:\n"
+        "- LinkedIn\n"
+        "- Facebook\n"
+        "- Instagram\n\n"
+        "Let's set up your profile first. This helps me generate better content for you.\n\n"
+        "What *industry* are you in? (e.g. Tech, Marketing, Finance, Healthcare)",
+    )
+    db.set_conversation_state(sender, ConversationState.ONBOARDING_INDUSTRY, {})
+
+
+async def handle_help(db: BotDatabase, sender: str, text: str):
+    """Show available commands."""
+    await wa.send_text(
+        sender,
+        "*Available Commands:*\n\n"
+        "*Content*\n"
+        "  post — Create and publish a post (5 credits)\n"
+        "  schedule — Schedule a post for later (5 credits)\n"
+        "  reply — Auto-reply to comments (3 credits)\n\n"
+        "*Account*\n"
+        "  credits — Check credit balance\n"
+        "  stats — View automation statistics\n"
+        "  setup — Connect LinkedIn / Facebook / Instagram\n"
+        "  settings — View/update your profile\n\n"
+        "*Subscription*\n"
+        "  subscribe — Subscribe or manage plan\n"
+        "  cancel — Cancel subscription\n\n"
+        "Send *cancel* at any time to exit a multi-step flow.",
+    )
+
+
+async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state: ConversationState, data: dict):
+    """Process each step of the onboarding flow."""
+
+    if state == ConversationState.ONBOARDING_INDUSTRY:
+        data["industry"] = [t.strip() for t in text.split(",")]
+        db.set_conversation_state(sender, ConversationState.ONBOARDING_SKILLS, data)
+        await wa.send_text(
+            sender,
+            "Great! Now list your *key skills* (comma-separated).\n"
+            "e.g. Python, Data Analysis, Project Management",
+        )
+
+    elif state == ConversationState.ONBOARDING_SKILLS:
+        data["skills"] = [t.strip() for t in text.split(",")]
+        db.set_conversation_state(sender, ConversationState.ONBOARDING_GOALS, data)
+        await wa.send_text(
+            sender,
+            "What are your *career goals*? (comma-separated)\n"
+            "e.g. Grow personal brand, Find new clients, Network with recruiters",
+        )
+
+    elif state == ConversationState.ONBOARDING_GOALS:
+        data["career_goals"] = [t.strip() for t in text.split(",")]
+        db.set_conversation_state(sender, ConversationState.ONBOARDING_TONE, data)
+        await wa.send_interactive_buttons(
+            sender,
+            "What *tone* should I use for your content?",
+            [
+                {"id": "professional", "title": "Professional"},
+                {"id": "casual", "title": "Casual"},
+                {"id": "thought_leader", "title": "Thought Leader"},
+            ],
+        )
+
+    elif state == ConversationState.ONBOARDING_TONE:
+        data["tone"] = [text.strip()]
+
+        # Save profile
+        db.save_user_profile(sender, data)
+        db.clear_conversation_state(sender)
+
+        await wa.send_text(
+            sender,
+            "Profile saved!\n\n"
+            "Next steps:\n"
+            "1. Send *setup* to connect your social media accounts\n"
+            "2. Send *subscribe* to activate your plan (500 credits/month)\n"
+            "3. Send *post* to create your first post\n\n"
+            "Send *help* anytime to see all commands.",
+        )

@@ -1,0 +1,25 @@
+{$DOMAIN:localhost} {
+    # WhatsApp webhook
+    handle /webhook* {
+        reverse_proxy gateway:8000
+    }
+
+    # Payment pages and Stripe webhooks
+    handle /payment/* {
+        reverse_proxy payment:5000
+    }
+    handle /webhook/stripe {
+        reverse_proxy payment:5000
+    }
+
+    # Health checks
+    handle /health/gateway {
+        reverse_proxy gateway:8000
+    }
+    handle /health/payment {
+        reverse_proxy payment:5000
+    }
+
+    # Default
+    respond "Multi-Platform Automation Bot" 200
+}
