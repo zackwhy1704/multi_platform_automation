@@ -1,6 +1,6 @@
 """
 Celery application configuration for multi-platform automation.
-Each platform has its own queues for posting and engagement.
+Facebook + Instagram only (Graph API). No browser automation.
 """
 
 import os
@@ -14,7 +14,6 @@ from kombu import Queue, Exchange
 celery_app = Celery(
     "multi_platform_automation",
     include=[
-        "services.linkedin.tasks",
         "services.facebook.tasks",
         "services.instagram.tasks",
         "workers.notification",
@@ -26,16 +25,12 @@ celery_app.conf.broker_url = REDIS_URL
 celery_app.conf.result_backend = REDIS_URL
 
 # --- Exchanges ---
-linkedin_exchange = Exchange("linkedin", type="direct")
 facebook_exchange = Exchange("facebook", type="direct")
 instagram_exchange = Exchange("instagram", type="direct")
 notifications_exchange = Exchange("notifications", type="direct")
 
 # --- Queues (per-platform, per-action) ---
 celery_app.conf.task_queues = (
-    # LinkedIn
-    Queue("linkedin_posting", linkedin_exchange, routing_key="linkedin.posting", queue_arguments={"x-max-priority": 10}),
-    Queue("linkedin_engagement", linkedin_exchange, routing_key="linkedin.engagement", queue_arguments={"x-max-priority": 5}),
     # Facebook
     Queue("facebook_posting", facebook_exchange, routing_key="facebook.posting", queue_arguments={"x-max-priority": 10}),
     Queue("facebook_engagement", facebook_exchange, routing_key="facebook.engagement", queue_arguments={"x-max-priority": 5}),
@@ -48,10 +43,6 @@ celery_app.conf.task_queues = (
 
 # --- Task routing ---
 celery_app.conf.task_routes = {
-    # LinkedIn
-    "services.linkedin.tasks.post_task": {"queue": "linkedin_posting"},
-    "services.linkedin.tasks.ai_post_task": {"queue": "linkedin_posting"},
-    "services.linkedin.tasks.reply_task": {"queue": "linkedin_engagement"},
     # Facebook
     "services.facebook.tasks.post_task": {"queue": "facebook_posting"},
     "services.facebook.tasks.ai_post_task": {"queue": "facebook_posting"},

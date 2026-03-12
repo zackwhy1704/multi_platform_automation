@@ -19,26 +19,9 @@ stripe>=7.0.0
 # AI
 anthropic>=0.18.0
 
-# Browser automation (LinkedIn)
-selenium>=4.16.0
-webdriver-manager>=4.0.1
-fake-useragent>=1.4.0
-
 # Facebook/Instagram Graph API
 requests>=2.31.0
-
-# Encryption
-cryptography>=41.0.0
-
-# PDF parsing (resumes)
-PyPDF2>=3.0.0
-
-# HTML parsing
-beautifulsoup4>=4.12.3
+httpx>=0.26.0
 
 # Utilities
 python-dotenv>=1.0.0
-httpx>=0.26.0
-
-# Production servers
-gunicorn>=21.2.0
