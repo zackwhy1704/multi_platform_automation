@@ -24,7 +24,7 @@ def generate_post(
     Generate a social media post using Claude.
 
     Args:
-        platform: 'linkedin', 'facebook', or 'instagram'
+        platform: 'facebook' or 'instagram'
         profile: User profile dict with industry, skills, goals, tone
         topic: Optional topic/theme for the post
 
@@ -41,14 +41,9 @@ def generate_post(
     tone = ", ".join(profile.get("tone", ["professional"]))
 
     platform_guidance = {
-        "linkedin": (
-            "Write a LinkedIn post. Use a compelling hook in the first line. "
-            "Include insights, a personal story angle, and a call-to-action. "
-            "Use line breaks for readability. No hashtags in the body — add 3-5 at the end."
-        ),
         "facebook": (
             "Write a Facebook post. Keep it conversational and engaging. "
-            "Include a question to drive comments. Shorter than LinkedIn posts."
+            "Include a question to drive comments. Use short paragraphs."
         ),
         "instagram": (
             "Write an Instagram caption. Start with a hook, be concise and visual. "
@@ -60,7 +55,7 @@ def generate_post(
 
     prompt = f"""You are a social media content strategist.
 
-{platform_guidance.get(platform, platform_guidance['linkedin'])}
+{platform_guidance.get(platform, platform_guidance['facebook'])}
 
 Author profile:
 - Industry: {industry}
