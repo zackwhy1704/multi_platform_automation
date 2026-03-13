@@ -1,41 +1,25 @@
 """
 Onboarding and help handlers.
 Flow: Welcome → Industry → Offerings → Goals → Tone → Platform → Promo Code (optional)
+
+Uses ReAct-style input validation (Thought → Action → Observation):
+  - Each free-text input is validated by the LLM for relevance and clarity
+  - Invalid inputs get a helpful clarification prompt instead of a generic error
+  - Gibberish / non-English is rejected with guidance
+
 Freemium: 30 free credits on signup. Promo/referral codes grant bonus credits.
 """
 
 import logging
-import re
-import string
 import uuid
 
 from shared.database import BotDatabase
 from shared.config import FREE_SIGNUP_CREDITS
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
+from services.ai.input_validator import validate_input
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# English validation — rejects inputs that are clearly not English
-# ---------------------------------------------------------------------------
-# We allow ASCII letters, digits, common punctuation, and spaces.
-# If more than 40% of alpha characters are non-ASCII, we reject.
-_ASCII_LETTERS = set(string.ascii_letters)
-
-
-def _is_valid_english(text: str) -> bool:
-    """Return True if the text looks like valid English input."""
-    if not text or len(text.strip()) < 2:
-        return False
-    alpha_chars = [c for c in text if c.isalpha()]
-    if not alpha_chars:
-        return True  # numbers/punctuation only — allow
-    ascii_ratio = sum(1 for c in alpha_chars if c in _ASCII_LETTERS) / len(alpha_chars)
-    return ascii_ratio >= 0.6
-
-
-ENGLISH_ERROR = "Please reply in English. Your input doesn't look like valid English text — try again."
 
 
 def _generate_referral_code() -> str:
@@ -93,16 +77,39 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
 
 
 # ===========================================================================
+# ReAct VALIDATION HELPER
+# ===========================================================================
+
+async def _validate_and_respond(sender: str, text: str, step: str) -> dict | None:
+    """
+    Run ReAct validation on user input.
+
+    Returns the validation result if accepted (caller proceeds),
+    or None if rejected/clarified (message already sent to user).
+    """
+    result = validate_input(text, step)
+
+    if result["action"] == "accept":
+        return result
+
+    # Clarify or Reject — send the message and stay on the same step
+    msg = result.get("message") or "I didn't quite understand that. Could you try again?"
+    await wa.send_text(sender, msg)
+    return None
+
+
+# ===========================================================================
 # ONBOARDING STEPS
 # ===========================================================================
 
 async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state: ConversationState, data: dict):
     # --- INDUSTRY ---
     if state == ConversationState.ONBOARDING_INDUSTRY:
-        if not _is_valid_english(text):
-            await wa.send_text(sender, ENGLISH_ERROR)
-            return
-        data["industry"] = [t.strip() for t in text.split(",") if t.strip()]
+        v = await _validate_and_respond(sender, text, "industry")
+        if not v:
+            return  # validation failed — user was prompted to retry
+        cleaned = v.get("cleaned") or text.strip()
+        data["industry"] = [t.strip() for t in cleaned.split(",") if t.strip()]
         db.set_conversation_state(sender, ConversationState.ONBOARDING_OFFERINGS, data)
         await wa.send_text(
             sender,
@@ -112,10 +119,11 @@ async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state:
 
     # --- OFFERINGS ---
     elif state == ConversationState.ONBOARDING_OFFERINGS:
-        if not _is_valid_english(text):
-            await wa.send_text(sender, ENGLISH_ERROR)
+        v = await _validate_and_respond(sender, text, "offerings")
+        if not v:
             return
-        data["offerings"] = [t.strip() for t in text.split(",") if t.strip()]
+        cleaned = v.get("cleaned") or text.strip()
+        data["offerings"] = [t.strip() for t in cleaned.split(",") if t.strip()]
         db.set_conversation_state(sender, ConversationState.ONBOARDING_GOALS, data)
         await wa.send_text(
             sender,
@@ -125,10 +133,11 @@ async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state:
 
     # --- GOALS ---
     elif state == ConversationState.ONBOARDING_GOALS:
-        if not _is_valid_english(text):
-            await wa.send_text(sender, ENGLISH_ERROR)
+        v = await _validate_and_respond(sender, text, "goals")
+        if not v:
             return
-        data["business_goals"] = [t.strip() for t in text.split(",") if t.strip()]
+        cleaned = v.get("cleaned") or text.strip()
+        data["business_goals"] = [t.strip() for t in cleaned.split(",") if t.strip()]
         db.set_conversation_state(sender, ConversationState.ONBOARDING_TONE, data)
         await wa.send_interactive_buttons(
             sender,
@@ -223,7 +232,7 @@ async def handle_promo_step(db: BotDatabase, sender: str, text: str, state: Conv
         # Notify referrer
         await wa.send_text(
             referrer["phone_number_id"],
-            f"Someone used your referral code! You've earned *50 bonus credits*.",
+            "Someone used your referral code! You've earned *50 bonus credits*.",
         )
 
         db.clear_conversation_state(sender)
