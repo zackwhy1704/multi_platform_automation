@@ -22,16 +22,23 @@ COMMANDS = {
     "cancel": subscription.handle_cancel,
     "setup": settings.handle_setup,
     "settings": settings.handle_settings,
+    "referral": subscription.handle_referral,
 }
 
 STATE_HANDLERS = {
+    # Onboarding
     ConversationState.ONBOARDING_INDUSTRY: onboarding.handle_onboarding_step,
-    ConversationState.ONBOARDING_SKILLS: onboarding.handle_onboarding_step,
+    ConversationState.ONBOARDING_OFFERINGS: onboarding.handle_onboarding_step,
     ConversationState.ONBOARDING_GOALS: onboarding.handle_onboarding_step,
     ConversationState.ONBOARDING_TONE: onboarding.handle_onboarding_step,
+    ConversationState.ONBOARDING_PLATFORM: onboarding.handle_onboarding_step,
+    # Promo code
+    ConversationState.AWAITING_PROMO_CODE: onboarding.handle_promo_step,
+    # Platform setup
     ConversationState.SETUP_PLATFORM: settings.handle_setup_step,
     ConversationState.SETUP_FB_TOKEN: settings.handle_setup_step,
     ConversationState.SETUP_IG_TOKEN: settings.handle_setup_step,
+    # Actions
     ConversationState.AWAITING_POST_PLATFORM: actions.handle_post_step,
     ConversationState.AWAITING_POST_CONTENT: actions.handle_post_step,
     ConversationState.AWAITING_SCHEDULE_TIME: actions.handle_post_step,
@@ -61,6 +68,7 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
         await wa.send_text(sender, "Sorry, I can only process text messages and button replies right now.")
         return
 
+    # Check conversation state first
     conv = db.get_conversation_state(sender)
     if conv and conv["state"] != ConversationState.IDLE:
         if text.lower() in ("cancel", "exit", "quit"):
@@ -73,7 +81,13 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
             await handler(db=db, sender=sender, text=text, state=state, data=conv.get("data") or {})
             return
 
+    # Check if new user (no profile) — auto-start onboarding
     command_word = text.lower().split()[0] if text else ""
+    profile = db.get_user_profile(sender)
+    if not profile and command_word not in ("start", "help"):
+        await onboarding.handle_start(db=db, sender=sender, text=text)
+        return
+
     handler = COMMANDS.get(command_word)
     if handler:
         await handler(db=db, sender=sender, text=text)
@@ -89,6 +103,7 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
         "*credits* — Check credit balance\n"
         "*setup* — Connect a platform\n"
         "*settings* — View/update settings\n"
-        "*subscribe* — Manage subscription\n"
+        "*subscribe* — Upgrade your plan\n"
+        "*referral* — Get your referral code\n"
         "*help* — Show all commands",
     )

@@ -1,6 +1,6 @@
 """
 Content creation and engagement handlers.
-Facebook + Instagram only (Graph API). No browser automation.
+Facebook + Instagram only (Graph API). Freemium: credits-based, no subscription required.
 """
 
 import logging
@@ -15,26 +15,25 @@ logger = logging.getLogger(__name__)
 PLATFORM_LABELS = {"facebook": "Facebook", "instagram": "Instagram"}
 
 
-async def _check_subscription(db: BotDatabase, sender: str) -> bool:
-    if not db.is_subscription_active(sender):
-        await wa.send_text(sender, "You need an active subscription to use this feature.\nSend *subscribe* to get started (500 credits/month).")
-        return False
-    return True
-
-
 async def _check_credits(db: BotDatabase, sender: str, action: str) -> bool:
+    """Check if user has enough credits. Prompts upgrade if not."""
     cm = CreditManager(db)
     if not cm.has_enough(sender, action):
         balance = cm.get_balance(sender)
         cost = get_action_cost(action)
-        await wa.send_text(sender, f"Insufficient credits. This action costs *{cost}* credits but you have *{balance}* remaining.\n\nYour credits reset on your next billing cycle. Send *credits* for details.")
+        await wa.send_text(
+            sender,
+            f"Not enough credits. This costs *{cost}* credits but you have *{balance}*.\n\n"
+            "Ways to get more credits:\n"
+            "  *subscribe* — 500 credits/month\n"
+            "  *referral* — Share your code, earn 50 credits per friend\n\n"
+            "Send *credits* for your full balance breakdown.",
+        )
         return False
     return True
 
 
 async def handle_post(db: BotDatabase, sender: str, text: str):
-    if not await _check_subscription(db, sender):
-        return
     if not await _check_credits(db, sender, "post"):
         return
     await wa.send_interactive_buttons(sender, "Which platform do you want to post on?",
@@ -94,8 +93,6 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str, state: Conve
 
 
 async def handle_schedule(db: BotDatabase, sender: str, text: str):
-    if not await _check_subscription(db, sender):
-        return
     if not await _check_credits(db, sender, "scheduled_post"):
         return
     await wa.send_interactive_buttons(sender, "Schedule a post for which platform?",
@@ -104,8 +101,6 @@ async def handle_schedule(db: BotDatabase, sender: str, text: str):
 
 
 async def handle_reply(db: BotDatabase, sender: str, text: str):
-    if not await _check_subscription(db, sender):
-        return
     if not await _check_credits(db, sender, "comment_reply"):
         return
     await wa.send_interactive_buttons(sender, "Auto-reply to comments on which platform?",
@@ -142,6 +137,6 @@ async def handle_stats(db: BotDatabase, sender: str, text: str):
     if len(lines) == 1:
         lines.append("No activity yet. Send *post* to get started!")
     cm = CreditManager(db)
-    summary = cm.get_usage_summary(sender)
-    lines.append(f"*Credits:* {summary['credits_remaining']}/{summary['credits_total']} remaining")
+    balance = cm.get_balance(sender)
+    lines.append(f"\n*Credits remaining:* {balance}")
     await wa.send_text(sender, "\n".join(lines))

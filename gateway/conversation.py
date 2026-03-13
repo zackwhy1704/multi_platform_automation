@@ -1,6 +1,6 @@
 """
 Conversation state machine for WhatsApp multi-step flows.
-API-only: Facebook + Instagram. No password collection flows.
+API-only: Facebook + Instagram. Freemium with referrals.
 """
 
 from enum import Enum
@@ -9,11 +9,15 @@ from enum import Enum
 class ConversationState(str, Enum):
     IDLE = "idle"
 
-    # Onboarding
+    # Onboarding (business-focused)
     ONBOARDING_INDUSTRY = "onboarding_industry"
-    ONBOARDING_SKILLS = "onboarding_skills"
+    ONBOARDING_OFFERINGS = "onboarding_offerings"
     ONBOARDING_GOALS = "onboarding_goals"
     ONBOARDING_TONE = "onboarding_tone"
+    ONBOARDING_PLATFORM = "onboarding_platform"
+
+    # Promo / referral code entry
+    AWAITING_PROMO_CODE = "awaiting_promo_code"
 
     # Platform setup (OAuth tokens only)
     SETUP_PLATFORM = "setup_platform"

@@ -1,6 +1,7 @@
 """
 PostgreSQL database layer with connection pooling.
 API-only: Facebook + Instagram via Graph API tokens. No passwords stored.
+Freemium model with referral system.
 """
 
 import logging
@@ -17,6 +18,7 @@ from shared.config import (
     DATABASE_PASSWORD,
     DATABASE_PORT,
     DATABASE_USER,
+    FREE_SIGNUP_CREDITS,
     MONTHLY_CREDITS,
 )
 
@@ -100,13 +102,13 @@ class BotDatabase:
     def create_user(self, phone_number_id: str, phone_number: str = None, display_name: str = None) -> bool:
         try:
             self.execute_query(
-                """INSERT INTO users (phone_number_id, phone_number, display_name, last_seen)
-                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                """INSERT INTO users (phone_number_id, phone_number, display_name, credits_remaining, last_seen)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
                 ON CONFLICT (phone_number_id) DO UPDATE SET
                     phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
                     display_name = COALESCE(EXCLUDED.display_name, users.display_name),
                     last_seen = CURRENT_TIMESTAMP""",
-                (phone_number_id, phone_number, display_name),
+                (phone_number_id, phone_number, display_name, FREE_SIGNUP_CREDITS),
             )
             return True
         except Exception as e:
@@ -117,21 +119,25 @@ class BotDatabase:
         self.execute_query("UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE phone_number_id = %s", (phone_number_id,))
 
     # =========================================================================
-    # USER PROFILES
+    # USER PROFILES (business-focused)
     # =========================================================================
 
     def save_user_profile(self, phone_number_id: str, profile_data: dict) -> bool:
         try:
             self.create_user(phone_number_id)
             self.execute_query(
-                """INSERT INTO user_profiles (phone_number_id, industry, skills, career_goals, tone, interests)
+                """INSERT INTO user_profiles (phone_number_id, industry, offerings, business_goals, tone, platform)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone_number_id) DO UPDATE SET
-                    industry = EXCLUDED.industry, skills = EXCLUDED.skills,
-                    career_goals = EXCLUDED.career_goals, tone = EXCLUDED.tone,
-                    interests = EXCLUDED.interests, updated_at = CURRENT_TIMESTAMP""",
-                (phone_number_id, profile_data.get("industry", []), profile_data.get("skills", []),
-                 profile_data.get("career_goals", []), profile_data.get("tone", []), profile_data.get("interests", [])),
+                    industry = EXCLUDED.industry, offerings = EXCLUDED.offerings,
+                    business_goals = EXCLUDED.business_goals, tone = EXCLUDED.tone,
+                    platform = EXCLUDED.platform, updated_at = CURRENT_TIMESTAMP""",
+                (phone_number_id,
+                 profile_data.get("industry", []),
+                 profile_data.get("offerings", []),
+                 profile_data.get("business_goals", []),
+                 profile_data.get("tone", []),
+                 profile_data.get("platform", "")),
             )
             return True
         except Exception as e:
@@ -167,6 +173,28 @@ class BotDatabase:
             "SELECT access_token, page_id FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
             (phone_number_id, platform), fetch="one",
         )
+
+    # =========================================================================
+    # CREDITS (Freemium)
+    # =========================================================================
+
+    def grant_credits(self, phone_number_id: str, amount: int, reason: str = "bonus") -> bool:
+        """Add credits to a user's balance."""
+        try:
+            self.execute_query(
+                "UPDATE users SET credits_remaining = credits_remaining + %s WHERE phone_number_id = %s",
+                (amount, phone_number_id),
+            )
+            # Log in ledger
+            self.execute_query(
+                "INSERT INTO credit_ledger (user_id, action, platform, credits_spent) VALUES (%s, %s, %s, %s)",
+                (phone_number_id, reason, "system", -amount),  # negative = credit granted
+            )
+            logger.info("Granted %d credits to %s (reason=%s)", amount, phone_number_id, reason)
+            return True
+        except Exception as e:
+            logger.error("Error granting credits to %s: %s", phone_number_id, e)
+            return False
 
     # =========================================================================
     # SUBSCRIPTION MANAGEMENT
@@ -220,6 +248,95 @@ class BotDatabase:
         return result.get("subscription_active", False)
 
     # =========================================================================
+    # REFERRAL SYSTEM
+    # =========================================================================
+
+    def set_referral_code(self, phone_number_id: str, code: str) -> bool:
+        try:
+            self.execute_query(
+                "UPDATE users SET referral_code = %s WHERE phone_number_id = %s",
+                (code, phone_number_id),
+            )
+            return True
+        except Exception as e:
+            logger.error("Error setting referral code for %s: %s", phone_number_id, e)
+            return False
+
+    def find_user_by_referral_code(self, code: str) -> Optional[Dict]:
+        return self.execute_query(
+            "SELECT phone_number_id, display_name FROM users WHERE referral_code = %s",
+            (code,), fetch="one",
+        )
+
+    def has_been_referred(self, phone_number_id: str) -> bool:
+        result = self.execute_query(
+            "SELECT 1 FROM referrals WHERE referred_id = %s", (phone_number_id,), fetch="one",
+        )
+        return result is not None
+
+    def set_referred_by(self, phone_number_id: str, referrer_id: str):
+        self.execute_query(
+            "UPDATE users SET referred_by = %s WHERE phone_number_id = %s",
+            (referrer_id, phone_number_id),
+        )
+
+    def record_referral(self, referrer_id: str, referred_id: str) -> bool:
+        try:
+            self.execute_query(
+                "INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (referrer_id, referred_id),
+            )
+            return True
+        except Exception as e:
+            logger.error("Error recording referral: %s", e)
+            return False
+
+    def get_referral_count(self, phone_number_id: str) -> int:
+        result = self.execute_query(
+            "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = %s",
+            (phone_number_id,), fetch="one",
+        )
+        return int(result["cnt"]) if result else 0
+
+    # =========================================================================
+    # PROMO CODES
+    # =========================================================================
+
+    def validate_promo_code(self, code: str) -> Optional[Dict]:
+        return self.execute_query(
+            """SELECT * FROM promo_codes WHERE code = %s AND active = TRUE
+              AND (max_uses IS NULL OR current_uses < max_uses)
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)""",
+            (code.upper(),), fetch="one",
+        )
+
+    def use_promo_code(self, code: str) -> bool:
+        try:
+            self.execute_query("UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code = %s", (code.upper(),))
+            return True
+        except Exception as e:
+            logger.error("Error using promo code %s: %s", code, e)
+            return False
+
+    def has_used_promo(self, phone_number_id: str, code: str) -> bool:
+        result = self.execute_query(
+            "SELECT 1 FROM promo_usage WHERE phone_number_id = %s AND code = %s",
+            (phone_number_id, code.upper()), fetch="one",
+        )
+        return result is not None
+
+    def record_promo_usage(self, phone_number_id: str, code: str, credits_granted: int) -> bool:
+        try:
+            self.execute_query(
+                "INSERT INTO promo_usage (phone_number_id, code, credits_granted) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (phone_number_id, code.upper(), credits_granted),
+            )
+            return True
+        except Exception as e:
+            logger.error("Error recording promo usage: %s", e)
+            return False
+
+    # =========================================================================
     # AUTOMATION STATS
     # =========================================================================
 
@@ -254,27 +371,6 @@ class BotDatabase:
                 "last_active": result["last_active"].isoformat() if result["last_active"] else None,
             }
         return {"posts_created": 0, "comments_made": 0, "last_active": None}
-
-    # =========================================================================
-    # PROMO CODES
-    # =========================================================================
-
-    def validate_promo_code(self, code: str) -> Optional[Dict]:
-        if code.upper() in ("FREE", "FREETRIAL"):
-            return {"code": code.upper(), "discount_percent": 100, "is_free_bypass": True}
-        return self.execute_query(
-            """SELECT * FROM promo_codes WHERE code = %s AND active = TRUE AND current_uses < max_uses
-              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)""",
-            (code.upper(),), fetch="one",
-        )
-
-    def use_promo_code(self, code: str) -> bool:
-        try:
-            self.execute_query("UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code = %s", (code.upper(),))
-            return True
-        except Exception as e:
-            logger.error("Error using promo code %s: %s", code, e)
-            return False
 
     # =========================================================================
     # ENGAGEMENT TRACKING

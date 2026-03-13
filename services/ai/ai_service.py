@@ -36,8 +36,8 @@ def generate_post(
         return None
 
     industry = ", ".join(profile.get("industry", []))
-    skills = ", ".join(profile.get("skills", []))
-    goals = ", ".join(profile.get("career_goals", []))
+    offerings = ", ".join(profile.get("offerings", []))
+    goals = ", ".join(profile.get("business_goals", []))
     tone = ", ".join(profile.get("tone", ["professional"]))
 
     platform_guidance = {
@@ -57,10 +57,10 @@ def generate_post(
 
 {platform_guidance.get(platform, platform_guidance['facebook'])}
 
-Author profile:
+Business profile:
 - Industry: {industry}
-- Skills: {skills}
-- Career goals: {goals}
+- Products/Services: {offerings}
+- Business goals: {goals}
 - Preferred tone: {tone}
 {topic_line}
 

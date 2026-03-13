@@ -38,6 +38,7 @@ AI_MODEL = os.getenv("AI_MODEL", "claude-haiku-4-5-20251001")
 
 # --- Credits ---
 MONTHLY_CREDITS = int(os.getenv("MONTHLY_CREDITS", 500))
+FREE_SIGNUP_CREDITS = int(os.getenv("FREE_SIGNUP_CREDITS", 30))
 CREDIT_COST_POST = int(os.getenv("CREDIT_COST_POST", 5))
 CREDIT_COST_REPLY = int(os.getenv("CREDIT_COST_REPLY", 3))
 

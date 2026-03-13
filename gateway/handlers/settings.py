@@ -19,9 +19,10 @@ async def handle_settings(db: BotDatabase, sender: str, text: str):
 
     if profile:
         lines.append(f"Industry: {', '.join(profile.get('industry', []))}")
-        lines.append(f"Skills: {', '.join(profile.get('skills', []))}")
-        lines.append(f"Goals: {', '.join(profile.get('career_goals', []))}")
+        lines.append(f"Offerings: {', '.join(profile.get('offerings', []))}")
+        lines.append(f"Goals: {', '.join(profile.get('business_goals', []))}")
         lines.append(f"Tone: {', '.join(profile.get('tone', []))}")
+        lines.append(f"Platform: {profile.get('platform', 'not set')}")
     else:
         lines.append("Profile not set up. Send *start* to begin.")
 

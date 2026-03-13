@@ -5,8 +5,10 @@ Actions and their costs:
   - post / scheduled_post: 5 credits
   - comment_reply:         3 credits
 
-Users receive 500 credits per monthly billing cycle.
-Credits reset on subscription renewal (handled by Stripe webhook).
+Freemium model:
+  - New users receive 30 free credits on signup.
+  - Subscribers receive 500 credits per monthly billing cycle.
+  - Referral/promo codes grant bonus credits.
 """
 
 import logging
