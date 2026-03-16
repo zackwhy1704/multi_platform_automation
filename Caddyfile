@@ -1,4 +1,5 @@
-{$DOMAIN:localhost} {
+# HTTP-only reverse proxy (ngrok terminates TLS externally)
+:80 {
     # Stripe webhook
     handle /stripe/webhook {
         reverse_proxy payment:5000
