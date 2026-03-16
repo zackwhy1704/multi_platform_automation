@@ -1,0 +1,37 @@
+:80 {
+    # Stripe webhook
+    handle /stripe/webhook {
+        reverse_proxy payment:5000
+    }
+
+    # Payment pages (success, cancel, portal-return)
+    handle /payment/* {
+        reverse_proxy payment:5000
+    }
+
+    # WhatsApp webhook (GET verify + POST messages)
+    handle /webhook {
+        reverse_proxy gateway:8000
+    }
+
+    # OAuth callback (Facebook/Instagram)
+    handle /auth/* {
+        reverse_proxy gateway:8000
+    }
+
+    # Media serving (images/videos for Graph API)
+    handle /media/* {
+        reverse_proxy gateway:8000
+    }
+
+    # Health checks
+    handle /health/gateway {
+        reverse_proxy gateway:8000
+    }
+    handle /health/payment {
+        reverse_proxy payment:5000
+    }
+
+    # Default 
+    respond "Multi-Platform Automation Bot" 200
+}

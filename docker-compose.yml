@@ -47,8 +47,8 @@ services:
     environment:
       DATABASE_HOST: db
       REDIS_URL: redis://redis:6379/0
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
       - media_data:/app/media_files
     depends_on:
@@ -70,8 +70,8 @@ services:
       DATABASE_HOST: db
       REDIS_URL: redis://redis:6379/0
     command: uvicorn payments.server:app --host 0.0.0.0 --port 5000 --workers 2
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
     depends_on:
       db:
         condition: service_healthy
