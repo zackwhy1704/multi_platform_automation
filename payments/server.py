@@ -1,6 +1,16 @@
 """
-Payment server — handles Stripe webhooks and checkout pages.
-Adapted for WhatsApp (sends notifications via WhatsApp instead of Telegram).
+Payment server — Stripe webhook handler.
+
+All payment UI is handled by Stripe's hosted pages:
+  - Checkout: Stripe Checkout (hosted) for subscriptions
+  - Management: Stripe Customer Portal for cancel/update
+  - Promo codes: Stripe's built-in promotion code UI at checkout
+
+We only handle:
+  1. Stripe webhooks (payment confirmation, renewals, cancellations)
+  2. Minimal redirect pages (success/cancel) that tell user to return to WhatsApp
+
+No custom payment forms, no card handling, full PCI compliance via Stripe.
 """
 
 import logging
@@ -73,84 +83,75 @@ def _get_subscription_period_end(subscription) -> int | None:
 
 
 # =========================================================================
-# PAYMENT PAGES
+# REDIRECT PAGES (minimal — just tells user to go back to WhatsApp)
+# Stripe Checkout handles ALL payment UI. These are just landing pages.
 # =========================================================================
 
-PAYMENT_SUCCESS_HTML = """<!DOCTYPE html>
+_SUCCESS_HTML = """<!DOCTYPE html>
 <html><head><title>Payment Successful</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:20px}
-.card{text-align:center;padding:40px;background:rgba(255,255,255,.1);border-radius:20px;
-backdrop-filter:blur(10px);max-width:400px;width:100%}
-h1{font-size:48px}p{font-size:18px;line-height:1.6}
+min-height:100vh;margin:0;background:#f0fdf4;color:#166534;padding:20px;text-align:center}
+.card{padding:40px;max-width:400px}
+h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
 </style></head>
-<body><div class="card"><h1>&#10003;</h1><p><strong>Payment Successful!</strong></p>
-<p>Your subscription is now active with 500 credits.</p>
-<p>Return to WhatsApp to start automating!</p></div></body></html>"""
+<body><div class="card">
+<h1>&#10003;</h1>
+<p><strong>Payment successful!</strong></p>
+<p>Your subscription is being activated. Return to WhatsApp — you'll receive a confirmation message shortly.</p>
+</div></body></html>"""
 
-PAYMENT_CANCEL_HTML = """<!DOCTYPE html>
+_CANCEL_HTML = """<!DOCTYPE html>
 <html><head><title>Payment Cancelled</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#f5f5f5;color:#333;padding:20px}
-.card{text-align:center;padding:40px;background:#fff;border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,.1);max-width:400px;width:100%}
+min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}
+.card{padding:40px;max-width:400px}
+h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
 </style></head>
-<body><div class="card"><h1>&#10060;</h1><p>Payment was cancelled.</p>
-<p>Send <strong>subscribe</strong> in WhatsApp to try again.</p></div></body></html>"""
+<body><div class="card">
+<h1>&#8592;</h1>
+<p>Payment cancelled. No charges were made.</p>
+<p>Return to WhatsApp and send <strong>subscribe</strong> to try again.</p>
+</div></body></html>"""
+
+_PORTAL_RETURN_HTML = """<!DOCTYPE html>
+<html><head><title>Subscription Updated</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#eff6ff;color:#1e40af;padding:20px;text-align:center}
+.card{padding:40px;max-width:400px}
+h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+</style></head>
+<body><div class="card">
+<h1>&#10003;</h1>
+<p>Subscription updated. Return to WhatsApp to continue.</p>
+</div></body></html>"""
 
 
 @app.get("/payment/success", response_class=HTMLResponse)
-async def payment_success(session_id: str = ""):
-    """Success page after Stripe checkout."""
-    if session_id:
-        try:
-            checkout_session = stripe.checkout.Session.retrieve(session_id)
-            customer_id = checkout_session.get("customer")
-            subscription_id = checkout_session.get("subscription")
-            phone = checkout_session.get("client_reference_id") or checkout_session.get("metadata", {}).get("phone_number_id")
-
-            if phone and (customer_id or subscription_id):
-                days = 30
-                if subscription_id:
-                    try:
-                        sub = stripe.Subscription.retrieve(subscription_id)
-                        period_end = _get_subscription_period_end(sub)
-                        if period_end:
-                            sub_end = datetime.fromtimestamp(period_end)
-                            days = max(1, (sub_end - datetime.now()).days)
-                    except Exception:
-                        pass
-
-                db.activate_subscription(phone, stripe_customer_id=customer_id, stripe_subscription_id=subscription_id, days=days)
-                logger.info("Activated subscription for %s (customer=%s)", phone, customer_id)
-
-                _notify(
-                    phone,
-                    "Payment Successful!\n\n"
-                    f"Your subscription is now ACTIVE with *{MONTHLY_CREDITS} credits*.\n\n"
-                    "Send *post* to create your first post!",
-                )
-        except Exception as e:
-            logger.error("Error processing checkout session %s: %s", session_id, e)
-
-    return HTMLResponse(PAYMENT_SUCCESS_HTML)
+async def payment_success():
+    """Redirect page after Stripe Checkout. Activation happens via webhook."""
+    return HTMLResponse(_SUCCESS_HTML)
 
 
 @app.get("/payment/cancel", response_class=HTMLResponse)
 async def payment_cancel():
-    return HTMLResponse(PAYMENT_CANCEL_HTML)
+    """Redirect page when user cancels Stripe Checkout."""
+    return HTMLResponse(_CANCEL_HTML)
 
 
-@app.get("/payment/cancel-complete", response_class=HTMLResponse)
-async def cancel_complete():
-    return HTMLResponse("<html><body><h1>Cancellation processed</h1><p>Return to WhatsApp.</p></body></html>")
+@app.get("/payment/portal-return", response_class=HTMLResponse)
+async def portal_return():
+    """Return page after Stripe Customer Portal."""
+    return HTMLResponse(_PORTAL_RETURN_HTML)
 
 
 # =========================================================================
-# STRIPE WEBHOOKS
+# STRIPE WEBHOOKS — the single source of truth for payment events
 # =========================================================================
 
 @app.post("/webhook/stripe")
@@ -192,7 +193,7 @@ def _find_user_by_stripe(customer_id: str, subscription_id: str = None):
 
 
 def _handle_checkout_completed(session):
-    """Activate subscription on successful checkout."""
+    """Activate subscription on successful checkout (webhook = source of truth)."""
     try:
         customer_id = session.get("customer")
         subscription_id = session.get("subscription")
@@ -250,7 +251,6 @@ def _handle_subscription_updated(subscription):
                 "Send *subscribe* to resubscribe anytime.",
             )
         elif status == "active":
-            # Subscription renewed — reset credits
             cm = CreditManager(db)
             cm.reset_credits(phone, MONTHLY_CREDITS)
             _notify(phone, f"Subscription renewed! Credits reset to *{MONTHLY_CREDITS}*.")
@@ -271,7 +271,7 @@ def _handle_subscription_deleted(subscription):
 
         phone = user["phone_number_id"]
         db.deactivate_subscription(phone)
-        _notify(phone, "Subscription Ended\n\nSend *subscribe* to resubscribe.")
+        _notify(phone, "Subscription Ended\n\nYour free credits are still available.\nSend *subscribe* to resubscribe.")
 
     except Exception as e:
         logger.error("Error in subscription.deleted: %s", e)

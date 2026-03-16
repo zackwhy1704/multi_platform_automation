@@ -1,5 +1,10 @@
 """
 Subscription, credit management, and referral handlers.
+
+All payment UI uses Stripe's hosted pages:
+  - Stripe Checkout: subscription signup + promo codes
+  - Stripe Customer Portal: cancel, update payment method, view invoices
+
 Freemium: all users get 30 free credits. Subscribers get 500/month.
 """
 
@@ -43,7 +48,7 @@ async def handle_credits(db: BotDatabase, sender: str, text: str):
 
 
 async def handle_subscribe(db: BotDatabase, sender: str, text: str):
-    """Create a Stripe checkout session and send payment link."""
+    """Create a Stripe Checkout session (hosted by Stripe) and send the link."""
     user = db.get_user(sender)
 
     if user and user.get("subscription_active"):
@@ -62,12 +67,16 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
         return
 
     try:
+        # Stripe Checkout handles ALL payment UI:
+        # - Card input, validation, 3D Secure
+        # - Promo code entry (allow_promotion_codes=True)
+        # - Tax collection, address collection
+        # - PCI compliance — we never touch card data
         session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
             line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
             mode="subscription",
-            success_url=f"{PAYMENT_SERVER_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}&phone={sender}",
-            cancel_url=f"{PAYMENT_SERVER_URL}/payment/cancel?phone={sender}",
+            success_url=f"{PAYMENT_SERVER_URL}/payment/success",
+            cancel_url=f"{PAYMENT_SERVER_URL}/payment/cancel",
             client_reference_id=sender,
             metadata={"phone_number_id": sender},
             allow_promotion_codes=True,
@@ -81,7 +90,7 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
             f"  - Up to 166 auto-replies/month\n"
             f"  - Priority content generation\n"
             f"  - Credits reset every billing cycle\n\n"
-            f"Have a Stripe promo code? Enter it at checkout!\n\n"
+            f"Have a promo code? You can enter it at checkout.\n\n"
             f"Subscribe here:\n{session.url}",
         )
     except Exception as e:
@@ -90,7 +99,14 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
 
 
 async def handle_cancel(db: BotDatabase, sender: str, text: str):
-    """Cancel subscription via Stripe portal."""
+    """Open Stripe Customer Portal for subscription management.
+
+    Stripe's hosted portal handles:
+      - Cancel subscription (immediate or end-of-period)
+      - Update payment method
+      - View invoice history
+      - Resume cancelled subscriptions
+    """
     user = db.get_user(sender)
 
     if not user or not user.get("subscription_active"):
@@ -103,14 +119,30 @@ async def handle_cancel(db: BotDatabase, sender: str, text: str):
         return
 
     try:
-        portal_session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=f"{PAYMENT_SERVER_URL}/payment/cancel-complete?phone={sender}",
-        )
+        # Use Stripe Customer Portal with cancel flow deep link
+        # This takes the user directly to the cancellation page
+        sub_id = user.get("stripe_subscription_id")
+        flow_data = None
+        if sub_id:
+            flow_data = {
+                "type": "subscription_cancel",
+                "subscription_cancel": {"subscription": sub_id},
+            }
+
+        portal_kwargs = {
+            "customer": customer_id,
+            "return_url": f"{PAYMENT_SERVER_URL}/payment/portal-return",
+        }
+        if flow_data:
+            portal_kwargs["flow_data"] = flow_data
+
+        portal_session = stripe.billing_portal.Session.create(**portal_kwargs)
+
         await wa.send_text(
             sender,
             f"Manage your subscription here:\n{portal_session.url}\n\n"
-            "You can cancel, update payment method, or view invoices.",
+            "You can cancel, update payment method, or view invoices.\n"
+            "All handled securely by Stripe.",
         )
     except Exception as e:
         logger.error("Stripe portal error for %s: %s", sender, e)
