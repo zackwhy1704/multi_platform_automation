@@ -44,9 +44,6 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env
-    environment:
-      DATABASE_HOST: db
-      REDIS_URL: redis://redis:6379/0
     expose:
       - "8000"
     volumes:
@@ -66,9 +63,6 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env
-    environment:
-      DATABASE_HOST: db
-      REDIS_URL: redis://redis:6379/0
     command: uvicorn payments.server:app --host 0.0.0.0 --port 5000 --workers 2
     expose:
       - "5000"
