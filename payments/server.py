@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Payment server — Stripe webhook handler.
 
