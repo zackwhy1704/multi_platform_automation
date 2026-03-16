@@ -1,0 +1,143 @@
+{
+  "name": "Multi-Platform Automation Bot",
+  "description": "AI-powered social media automation for Facebook & Instagram via WhatsApp",
+  "keywords": ["whatsapp", "facebook", "instagram", "ai", "automation", "celery", "postgresql"],
+  "envs": {
+    "DATABASE_HOST": {
+      "description": "PostgreSQL host (auto-set by Railway)",
+      "value": "${{ Databases.postgres.host }}"
+    },
+    "DATABASE_PORT": {
+      "description": "PostgreSQL port (auto-set by Railway)",
+      "value": "${{ Databases.postgres.port }}"
+    },
+    "DATABASE_NAME": {
+      "description": "PostgreSQL database name",
+      "value": "multi_platform_bot"
+    },
+    "DATABASE_USER": {
+      "description": "PostgreSQL user (auto-set by Railway)",
+      "value": "${{ Databases.postgres.user }}"
+    },
+    "DATABASE_PASSWORD": {
+      "description": "PostgreSQL password (auto-set by Railway)",
+      "value": "${{ Databases.postgres.password }}"
+    },
+    "REDIS_URL": {
+      "description": "Redis connection URL (auto-set by Railway or use Upstash)",
+      "value": "${{ Databases.redis.connectionString }}"
+    },
+    "WHATSAPP_TOKEN": {
+      "description": "WhatsApp Cloud API access token",
+      "required": true
+    },
+    "WHATSAPP_PHONE_NUMBER_ID": {
+      "description": "WhatsApp phone number ID",
+      "required": true
+    },
+    "WHATSAPP_BUSINESS_ACCOUNT_ID": {
+      "description": "WhatsApp business account ID",
+      "required": true
+    },
+    "WHATSAPP_APP_SECRET": {
+      "description": "WhatsApp app secret",
+      "required": true
+    },
+    "WHATSAPP_VERIFY_TOKEN": {
+      "description": "WhatsApp webhook verify token",
+      "required": true
+    },
+    "STRIPE_SECRET_KEY": {
+      "description": "Stripe secret key (production)",
+      "required": true
+    },
+    "STRIPE_WEBHOOK_SECRET": {
+      "description": "Stripe webhook signing secret",
+      "required": true
+    },
+    "STRIPE_PRICE_ID_STARTER": {
+      "description": "Stripe price ID for Starter plan",
+      "required": true
+    },
+    "STRIPE_PRICE_ID_PRO": {
+      "description": "Stripe price ID for Pro plan",
+      "required": true
+    },
+    "STRIPE_PRICE_ID_BUSINESS": {
+      "description": "Stripe price ID for Business plan",
+      "required": true
+    },
+    "STRIPE_PRICE_ID_PACK_100": {
+      "description": "Stripe price ID for 100 credit pack",
+      "required": true
+    },
+    "STRIPE_PRICE_ID_PACK_500": {
+      "description": "Stripe price ID for 500 credit pack",
+      "required": true
+    },
+    "STRIPE_PRICE_ID_PACK_1500": {
+      "description": "Stripe price ID for 1500 credit pack",
+      "required": true
+    },
+    "STRIPE_PRICE_ID_PACK_5000": {
+      "description": "Stripe price ID for 5000 credit pack",
+      "required": true
+    },
+    "ANTHROPIC_API_KEY": {
+      "description": "Claude API key",
+      "required": true
+    },
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API key",
+      "required": true
+    },
+    "KLING_ACCESS_KEY": {
+      "description": "Kling AI access key",
+      "required": true
+    },
+    "KLING_SECRET_KEY": {
+      "description": "Kling AI secret key",
+      "required": true
+    },
+    "FB_APP_ID": {
+      "description": "Facebook app ID",
+      "required": true
+    },
+    "FB_APP_SECRET": {
+      "description": "Facebook app secret",
+      "required": true
+    },
+    "OAUTH_REDIRECT_URI": {
+      "description": "OAuth callback URI (set to your production domain)",
+      "required": true
+    },
+    "PUBLIC_BASE_URL": {
+      "description": "Public base URL of your application",
+      "required": true
+    },
+    "PAYMENT_SERVER_URL": {
+      "description": "Payment server URL (Stripe redirects here)",
+      "required": true
+    },
+    "PEXELS_API_KEY": {
+      "description": "Pexels API key",
+      "required": true
+    },
+    "MONTHLY_CREDITS": {
+      "description": "Monthly credits for subscriptions",
+      "value": "500"
+    },
+    "FREE_SIGNUP_CREDITS": {
+      "description": "Free credits on signup",
+      "value": "30"
+    },
+    "CELERY_ALWAYS_EAGER": {
+      "description": "Run tasks async (false in production)",
+      "value": "false"
+    },
+    "ADMIN_PHONE_NUMBERS": {
+      "description": "Comma-separated admin phone numbers",
+      "value": ""
+    }
+  }
+}
