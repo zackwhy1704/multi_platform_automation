@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Content creation and engagement handlers.
 Facebook + Instagram only (Graph API). Freemium: credits-based.
