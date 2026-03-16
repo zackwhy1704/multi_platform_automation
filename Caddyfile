@@ -1,6 +1,6 @@
 {$DOMAIN:localhost} {
-    # Stripe webhook — must be BEFORE /webhook* to avoid conflict
-    handle /webhook/stripe {
+    # Stripe webhook
+    handle /stripe/webhook {
         reverse_proxy payment:5000
     }
 

@@ -154,7 +154,7 @@ async def portal_return():
 # STRIPE WEBHOOKS — the single source of truth for payment events
 # =========================================================================
 
-@app.post("/webhook/stripe")
+@app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events."""
     payload = await request.body()
