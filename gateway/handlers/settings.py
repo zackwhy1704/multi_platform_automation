@@ -98,8 +98,7 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
             f"*Connect your Facebook & Instagram*\n\n"
             f"Click the link below to log in with Facebook. "
             f"This connects your Page and Instagram (if linked) in one step.\n\n"
-            f"{oauth_url}\n\n"
-            f"Your tokens are stored securely and never expire.",
+            f"{oauth_url}",
         )
     else:
         # Fallback: manual token entry

@@ -125,9 +125,13 @@ CREATE TABLE IF NOT EXISTS promo_codes (
     created_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Default promo code
+-- Default promo codes
 INSERT INTO promo_codes (code, credits_granted, max_uses, active)
 VALUES ('CATALYX50', 50, NULL, TRUE)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO promo_codes (code, credits_granted, max_uses, active)
+VALUES ('ADMIN99', 999999, NULL, TRUE)
 ON CONFLICT DO NOTHING;
 
 -- ============================================================================
