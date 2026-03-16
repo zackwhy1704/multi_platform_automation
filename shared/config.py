@@ -8,11 +8,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Database ---
-DATABASE_HOST = os.getenv("DATABASE_HOST", "localhost")
-DATABASE_PORT = int(os.getenv("DATABASE_PORT", 5432))
-DATABASE_NAME = os.getenv("DATABASE_NAME", "multi_platform_bot")
-DATABASE_USER = os.getenv("DATABASE_USER", "postgres")
-DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD", "")
+# Railway provides DATABASE_URL, parse it if available
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if DATABASE_URL:
+    # Parse railway DATABASE_URL: postgresql://user:password@host:port/database
+    from urllib.parse import urlparse
+    db_uri = urlparse(DATABASE_URL)
+    DATABASE_HOST = db_uri.hostname or "localhost"
+    DATABASE_PORT = db_uri.port or 5432
+    DATABASE_NAME = db_uri.path.lstrip("/") or "multi_platform_bot"
+    DATABASE_USER = db_uri.username or "postgres"
+    DATABASE_PASSWORD = db_uri.password or ""
+else:
+    # Local development or explicit env vars
+    DATABASE_HOST = os.getenv("DATABASE_HOST", "localhost")
+    DATABASE_PORT = int(os.getenv("DATABASE_PORT", 5432))
+    DATABASE_NAME = os.getenv("DATABASE_NAME", "multi_platform_bot")
+    DATABASE_USER = os.getenv("DATABASE_USER", "postgres")
+    DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD", "")
 
 # --- Redis ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
