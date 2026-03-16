@@ -5,11 +5,17 @@ Shared configuration loaded from environment variables.
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # no-op if .env doesn't exist (e.g. on Railway)
 
 # --- Database ---
 # Railway provides DATABASE_URL or PG* vars; parse in priority order
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# Debug: log which database config path is used
+import logging as _logging
+_db_log = _logging.getLogger(__name__)
+_db_log.info("DATABASE_URL set: %s, PGHOST set: %s, DATABASE_HOST set: %s",
+             bool(DATABASE_URL), bool(os.getenv("PGHOST")), os.getenv("DATABASE_HOST", "(not set)"))
 if DATABASE_URL:
     # Parse railway DATABASE_URL: postgresql://user:password@host:port/database
     from urllib.parse import urlparse
