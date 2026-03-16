@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Database ---
-# Railway provides DATABASE_URL, parse it if available
+# Railway provides DATABASE_URL or PG* vars; parse in priority order
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL:
     # Parse railway DATABASE_URL: postgresql://user:password@host:port/database
@@ -19,8 +19,15 @@ if DATABASE_URL:
     DATABASE_NAME = db_uri.path.lstrip("/") or "multi_platform_bot"
     DATABASE_USER = db_uri.username or "postgres"
     DATABASE_PASSWORD = db_uri.password or ""
+elif os.getenv("PGHOST"):
+    # Railway PostgreSQL plugin sets PG* env vars
+    DATABASE_HOST = os.getenv("PGHOST", "localhost")
+    DATABASE_PORT = int(os.getenv("PGPORT", 5432))
+    DATABASE_NAME = os.getenv("PGDATABASE", "multi_platform_bot")
+    DATABASE_USER = os.getenv("PGUSER", "postgres")
+    DATABASE_PASSWORD = os.getenv("PGPASSWORD", "")
 else:
-    # Local development or explicit env vars
+    # Local development or explicit DATABASE_* env vars
     DATABASE_HOST = os.getenv("DATABASE_HOST", "localhost")
     DATABASE_PORT = int(os.getenv("DATABASE_PORT", 5432))
     DATABASE_NAME = os.getenv("DATABASE_NAME", "multi_platform_bot")
