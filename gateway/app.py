@@ -37,6 +37,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Multi-Platform Automation Gateway", lifespan=lifespan)
 
 
+@app.get("/")
+async def health_check():
+    """Health check endpoint for Railway."""
+    return {"status": "ok", "service": "gateway"}
+
+
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     """Meta webhook verification (GET challenge)."""
