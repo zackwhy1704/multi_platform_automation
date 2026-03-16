@@ -1,11 +1,10 @@
 """
 Onboarding and help handlers.
-Flow: Welcome → Industry → Offerings → Goals → Tone → Platform → Promo Code (optional)
+Flow: Welcome → Industry → Offerings → Goals → Tone → Content Style → Visual Style → Platform → Promo Code
 
 Uses ReAct-style input validation (Thought → Action → Observation):
   - Each free-text input is validated by the LLM for relevance and clarity
   - Invalid inputs get a helpful clarification prompt instead of a generic error
-  - Gibberish / non-English is rejected with guidance
 
 Freemium: 30 free credits on signup. Promo/referral codes grant bonus credits.
 """
@@ -15,6 +14,7 @@ import uuid
 
 from shared.database import BotDatabase
 from shared.config import FREE_SIGNUP_CREDITS
+from shared.credits import ACTION_COSTS
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
 from services.ai.input_validator import validate_input
@@ -45,9 +45,8 @@ async def handle_start(db: BotDatabase, sender: str, text: str):
     await wa.send_text(
         sender,
         "Welcome to the *AI Automation Service*!\n\n"
-        "I help businesses automate their social media with AI-powered posts "
-        "and comment replies on *Facebook* and *Instagram* — all through the "
-        "official Meta Graph API. Safe, reliable, zero risk of account bans.\n\n"
+        "I help businesses automate their social media with AI-powered posts, "
+        "images, videos, and comment replies on *Facebook* and *Instagram*.\n\n"
         "Let's set up your profile so I can create content tailored to your business.\n\n"
         "What *industry* is your business in?\n"
         "_e.g. E-commerce, Tech, F&B, Healthcare, Real Estate, Marketing_",
@@ -59,20 +58,23 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
     await wa.send_text(
         sender,
         "*Available Commands:*\n\n"
-        "*Content*\n"
-        "  post — Create and publish a post (5 credits)\n"
-        "  schedule — Schedule a post for later (5 credits)\n"
-        "  reply — Auto-reply to comments (3 credits)\n\n"
+        "*Content Creation*\n"
+        f"  post — Create a post ({ACTION_COSTS['text_post']}-{ACTION_COSTS['ai_video_post']} credits)\n"
+        f"  auto — Auto-generate a week of posts\n"
+        f"  schedule — Schedule a post for later\n"
+        f"  reply — Auto-reply to comments ({ACTION_COSTS['comment_reply']} credits)\n\n"
+        "*Quick post:* Just send a photo or video!\n\n"
+        "*Credit Costs:*\n"
+        f"  Text post: {ACTION_COSTS['text_post']} | Stock image: {ACTION_COSTS['stock_image_post']}\n"
+        f"  Own media: {ACTION_COSTS['own_media_post']} | AI image: {ACTION_COSTS['ai_image_post']}\n"
+        f"  AI video: {ACTION_COSTS['ai_video_post']} | Reply: {ACTION_COSTS['comment_reply']}\n\n"
         "*Account*\n"
-        "  credits — Check credit balance\n"
-        "  stats — View automation statistics\n"
-        "  setup — Connect Facebook / Instagram\n"
-        "  settings — View/update your profile\n"
-        "  referral — Get your referral code\n\n"
+        "  credits — Check balance | buy — Buy credit packs\n"
+        "  stats — View stats | setup — Connect platforms\n"
+        "  settings — Profile | referral — Referral code\n\n"
         "*Subscription*\n"
-        "  subscribe — Upgrade for 500 credits/month\n"
-        "  cancel — Cancel subscription\n\n"
-        "Send *cancel* at any time to exit a multi-step flow.",
+        "  subscribe — View plans | cancel — Cancel sub\n\n"
+        "Send *cancel* at any time to exit a flow.",
     )
 
 
@@ -80,19 +82,10 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
 # ReAct VALIDATION HELPER
 # ===========================================================================
 
-async def _validate_and_respond(sender: str, text: str, step: str) -> dict | None:
-    """
-    Run ReAct validation on user input.
-
-    Returns the validation result if accepted (caller proceeds),
-    or None if rejected/clarified (message already sent to user).
-    """
+async def _validate_and_respond(sender: str, text: str, step: str):
     result = validate_input(text, step)
-
     if result["action"] == "accept":
         return result
-
-    # Clarify or Reject — send the message and stay on the same step
     msg = result.get("message") or "I didn't quite understand that. Could you try again?"
     await wa.send_text(sender, msg)
     return None
@@ -107,7 +100,7 @@ async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state:
     if state == ConversationState.ONBOARDING_INDUSTRY:
         v = await _validate_and_respond(sender, text, "industry")
         if not v:
-            return  # validation failed — user was prompted to retry
+            return
         cleaned = v.get("cleaned") or text.strip()
         data["industry"] = [t.strip() for t in cleaned.split(",") if t.strip()]
         db.set_conversation_state(sender, ConversationState.ONBOARDING_OFFERINGS, data)
@@ -127,8 +120,8 @@ async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state:
         db.set_conversation_state(sender, ConversationState.ONBOARDING_GOALS, data)
         await wa.send_text(
             sender,
-            "What do you want your social media to *achieve for your business*? (comma-separated)\n"
-            "_e.g. Get more customers, Build brand awareness, Drive website traffic, Grow community_",
+            "What do you want your social media to *achieve*? (comma-separated)\n"
+            "_e.g. Get more customers, Build brand awareness, Drive traffic, Grow community_",
         )
 
     # --- GOALS ---
@@ -152,6 +145,58 @@ async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state:
     # --- TONE ---
     elif state == ConversationState.ONBOARDING_TONE:
         data["tone"] = [text.strip()]
+        db.set_conversation_state(sender, ConversationState.ONBOARDING_CONTENT_STYLE, data)
+        await wa.send_interactive_list(
+            sender,
+            "What *type of content* works best for your brand?\n\n"
+            "This helps the AI generate posts that match your style.",
+            "Choose Style",
+            [{
+                "title": "Content Styles",
+                "rows": [
+                    {"id": "humorous", "title": "Humorous / Memes", "description": "Funny, relatable, meme-worthy content"},
+                    {"id": "educational", "title": "Educational / Tips", "description": "Informative how-tos and industry tips"},
+                    {"id": "inspirational", "title": "Inspirational", "description": "Motivational and uplifting content"},
+                    {"id": "behind_the_scenes", "title": "Behind the Scenes", "description": "Authentic day-to-day business life"},
+                    {"id": "product_showcase", "title": "Product Showcase", "description": "Highlight products and services"},
+                    {"id": "mixed", "title": "Mix of Everything", "description": "Varied content for broader appeal"},
+                ],
+            }],
+        )
+
+    # --- CONTENT STYLE ---
+    elif state == ConversationState.ONBOARDING_CONTENT_STYLE:
+        valid_styles = ("humorous", "educational", "inspirational", "behind_the_scenes", "product_showcase", "mixed")
+        style = text.lower().strip().replace(" ", "_")
+        if style not in valid_styles:
+            await wa.send_text(sender, "Please choose one of the content styles from the list above.")
+            return
+        data["content_style"] = style
+        db.set_conversation_state(sender, ConversationState.ONBOARDING_VISUAL_STYLE, data)
+        await wa.send_interactive_list(
+            sender,
+            "What *visual style* should AI-generated images and videos have?",
+            "Choose Visual",
+            [{
+                "title": "Visual Styles",
+                "rows": [
+                    {"id": "cartoon", "title": "Cartoon / Illustrated", "description": "Fun, colorful illustrations and vector art"},
+                    {"id": "minimalist", "title": "Clean & Minimalist", "description": "Modern, white space, simple design"},
+                    {"id": "bold_colorful", "title": "Bold & Colorful", "description": "Vibrant colors, high contrast graphics"},
+                    {"id": "photorealistic", "title": "Photorealistic", "description": "Realistic photos, natural lighting"},
+                    {"id": "meme_style", "title": "Meme Style", "description": "Internet humor, relatable format"},
+                ],
+            }],
+        )
+
+    # --- VISUAL STYLE ---
+    elif state == ConversationState.ONBOARDING_VISUAL_STYLE:
+        valid_visuals = ("cartoon", "minimalist", "bold_colorful", "photorealistic", "meme_style")
+        visual = text.lower().strip().replace(" ", "_")
+        if visual not in valid_visuals:
+            await wa.send_text(sender, "Please choose one of the visual styles from the list above.")
+            return
+        data["visual_style"] = visual
         db.set_conversation_state(sender, ConversationState.ONBOARDING_PLATFORM, data)
         await wa.send_interactive_buttons(
             sender,
@@ -171,15 +216,14 @@ async def handle_onboarding_step(db: BotDatabase, sender: str, text: str, state:
             return
         data["platform"] = platform
 
-        # Save profile
+        # Save profile (includes content_style and visual_style)
         db.save_user_profile(sender, data)
 
-        # Generate referral code for this user
+        # Generate referral code
         referral_code = _generate_referral_code()
         db.set_referral_code(sender, referral_code)
 
-        # Grant free signup credits
-        db.grant_credits(sender, FREE_SIGNUP_CREDITS, reason="signup_bonus")
+        # Note: free signup credits (30) are already granted in create_user()
 
         # Ask for promo/referral code
         db.set_conversation_state(sender, ConversationState.AWAITING_PROMO_CODE, data)
@@ -208,7 +252,7 @@ async def handle_promo_step(db: BotDatabase, sender: str, text: str, state: Conv
         await _send_onboarding_complete(db, sender)
         return
 
-    # Check if it's a referral code (REF-XXXXXX)
+    # Referral code (REF-XXXXXX)
     if code.startswith("REF-"):
         referrer = db.find_user_by_referral_code(code)
         if not referrer:
@@ -217,19 +261,15 @@ async def handle_promo_step(db: BotDatabase, sender: str, text: str, state: Conv
         if referrer["phone_number_id"] == sender:
             await wa.send_text(sender, "You can't use your own referral code! Try a different code or type *skip*.")
             return
-
-        # Check if already referred
         if db.has_been_referred(sender):
             await wa.send_text(sender, "You've already used a referral code. Type *skip* to continue.")
             return
 
-        # Grant credits to both
         db.grant_credits(sender, 50, reason="referral_bonus")
         db.grant_credits(referrer["phone_number_id"], 50, reason="referral_reward")
         db.record_referral(referrer["phone_number_id"], sender)
         db.set_referred_by(sender, referrer["phone_number_id"])
 
-        # Notify referrer
         await wa.send_text(
             referrer["phone_number_id"],
             "Someone used your referral code! You've earned *50 bonus credits*.",
@@ -240,13 +280,12 @@ async def handle_promo_step(db: BotDatabase, sender: str, text: str, state: Conv
         await _send_onboarding_complete(db, sender)
         return
 
-    # Check if it's a promo code
+    # Promo code
     promo = db.validate_promo_code(code)
     if not promo:
         await wa.send_text(sender, "That code isn't valid or has expired. Try again or type *skip*.")
         return
 
-    # Check if user already used this promo code
     if db.has_used_promo(sender, code):
         await wa.send_text(sender, "You've already used this promo code. Try a different one or type *skip*.")
         return
@@ -269,16 +308,18 @@ async def _send_onboarding_complete(db: BotDatabase, sender: str):
 
     await wa.send_text(
         sender,
-        f"You're all set! Your credit balance: *{balance} credits*\n\n"
+        f"You're all set! Credit balance: *{balance} credits*\n\n"
         "*What you can do:*\n"
-        "  *post* — AI-powered posts to Facebook/Instagram (5 credits)\n"
-        "  *reply* — Auto-reply to comments (3 credits)\n"
-        "  *schedule* — Schedule posts for later (5 credits)\n\n"
+        f"  *post* — Create posts with AI images/videos\n"
+        f"  *auto* — Auto-generate a week of posts\n"
+        f"  *reply* — Auto-reply to comments\n\n"
+        "*Credit costs:*\n"
+        f"  Text: {ACTION_COSTS['text_post']} | Image: {ACTION_COSTS['ai_image_post']} | Video: {ACTION_COSTS['ai_video_post']} | Reply: {ACTION_COSTS['comment_reply']}\n\n"
         "*Next steps:*\n"
-        "1. Send *setup* to connect your Facebook or Instagram\n"
-        "2. Send *post* to create your first AI post\n"
-        "3. Send *subscribe* to upgrade to 500 credits/month\n\n"
+        "1. Send *setup* to connect Facebook/Instagram\n"
+        "2. Send *post* to create your first post\n"
+        "3. Send *subscribe* to view plans\n\n"
         f"Your referral code: *{referral_code}*\n"
-        "Share it with friends — you both get *50 bonus credits*!\n\n"
+        "Share it — you both get *50 bonus credits*!\n\n"
         "Send *help* anytime to see all commands.",
     )

@@ -1,16 +1,21 @@
 """
 WhatsApp Gateway — FastAPI application.
 Receives Meta Cloud API webhooks and dispatches to conversation handlers.
+Includes OAuth callback and media serving endpoints.
 """
 
+import os
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, FileResponse
 
 from shared.config import WHATSAPP_VERIFY_TOKEN
 from shared.database import BotDatabase
 from gateway.router import handle_incoming_message
+from gateway.handlers.oauth import handle_oauth_callback, OAUTH_SUCCESS_HTML, OAUTH_ERROR_HTML
+from gateway.media import MEDIA_DIR
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -53,7 +58,6 @@ async def receive_webhook(request: Request):
     """Process incoming WhatsApp messages."""
     body = await request.json()
 
-    # Meta sends notifications with this structure
     entry = body.get("entry", [])
     for e in entry:
         changes = e.get("changes", [])
@@ -74,6 +78,35 @@ async def receive_webhook(request: Request):
                 )
 
     return {"status": "ok"}
+
+
+@app.get("/auth/callback")
+async def oauth_callback(request: Request):
+    """Facebook OAuth callback — exchanges auth code for tokens."""
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
+
+    if error:
+        logger.warning("OAuth error: %s — %s", error, request.query_params.get("error_description"))
+        return HTMLResponse(OAUTH_ERROR_HTML)
+
+    if not code or not state:
+        return HTMLResponse(OAUTH_ERROR_HTML)
+
+    result = await handle_oauth_callback(code, state, app.state.db)
+    if result.get("success"):
+        return HTMLResponse(OAUTH_SUCCESS_HTML)
+    return HTMLResponse(OAUTH_ERROR_HTML)
+
+
+@app.get("/media/{filename}")
+async def serve_media(filename: str):
+    """Serve downloaded media files (for Facebook/Instagram Graph API to access)."""
+    file_path = os.path.join(MEDIA_DIR, filename)
+    if not os.path.exists(file_path):
+        return Response(status_code=404)
+    return FileResponse(file_path)
 
 
 @app.get("/health")

@@ -50,12 +50,16 @@ def _resolve_ig_account(access_token: str) -> str:
 
 
 @celery_app.task(bind=True, name="services.instagram.tasks.post_task", max_retries=2)
-def post_task(self, phone_number_id: str, content: str, image_url: str = None):
+def post_task(self, phone_number_id: str, content: str, media_url: str = None, image_url: str = None):
     """
     Post to Instagram via Graph API.
     Instagram requires an image_url for feed posts.
     If no image is provided, creates a text-only story (or fails).
+    media_url is the new parameter name; image_url is kept for backwards compatibility.
     """
+    # Accept either parameter name
+    image_url = media_url or image_url
+
     try:
         access_token, ig_account_id = _get_token(phone_number_id)
 
@@ -78,14 +82,21 @@ def post_task(self, phone_number_id: str, content: str, image_url: str = None):
             )
             return {"success": False, "error": "Image required for Instagram"}
 
-        # Step 1: Create media container
+        # Step 1: Create media container (image or video)
+        is_video = any(image_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi"))
+        container_data = {
+            "caption": content,
+            "access_token": access_token,
+        }
+        if is_video:
+            container_data["media_type"] = "VIDEO"
+            container_data["video_url"] = image_url
+        else:
+            container_data["image_url"] = image_url
+
         container_resp = requests.post(
             f"{GRAPH_API_BASE}/{ig_account_id}/media",
-            data={
-                "image_url": image_url,
-                "caption": content,
-                "access_token": access_token,
-            },
+            data=container_data,
             timeout=30,
         )
         container_resp.raise_for_status()

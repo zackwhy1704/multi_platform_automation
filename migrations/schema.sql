@@ -2,7 +2,7 @@
 -- Multi-Platform Automation Bot — PostgreSQL Schema
 -- Platforms: Facebook, Instagram (Graph API only — no browser automation)
 -- Interface: WhatsApp Cloud API
--- Credits: 500/month, 5 per post, 3 per reply
+-- Freemium: 30 free credits on signup, 500 credits/month for subscribers
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS schema_versions (
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS schema_versions (
     applied_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     description TEXT
 );
-INSERT INTO schema_versions (version, description) VALUES (1, 'Initial API-only schema')
+INSERT INTO schema_versions (version, description) VALUES (2, 'Freemium model with referrals')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================================
@@ -30,29 +30,34 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_customer_id     VARCHAR(255) UNIQUE,
     stripe_subscription_id VARCHAR(255) UNIQUE,
 
-    -- Credits
-    credits_remaining      INT DEFAULT 0,
+    -- Credits (new users get 30 free credits)
+    credits_remaining      INT DEFAULT 30,
     credits_used           INT DEFAULT 0,
     credits_reset_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    -- Referral
+    referral_code          VARCHAR(32) UNIQUE,
+    referred_by            VARCHAR(64),
 
     metadata               JSONB DEFAULT '{}'::jsonb
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(subscription_active, subscription_expires);
 CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code) WHERE referral_code IS NOT NULL;
 
 -- ============================================================================
--- USER PROFILES (content preferences)
+-- USER PROFILES (content preferences — business-focused)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS user_profiles (
     phone_number_id   VARCHAR(64) PRIMARY KEY REFERENCES users(phone_number_id) ON DELETE CASCADE,
     industry          TEXT[] DEFAULT '{}',
-    skills            TEXT[] DEFAULT '{}',
-    career_goals      TEXT[] DEFAULT '{}',
+    offerings         TEXT[] DEFAULT '{}',
+    business_goals    TEXT[] DEFAULT '{}',
     tone              TEXT[] DEFAULT '{}',
-    interests         TEXT[] DEFAULT '{}',
-    content_themes    TEXT[] DEFAULT '{}',
-    posting_frequency VARCHAR(32) DEFAULT 'daily',
+    content_style     VARCHAR(50) DEFAULT '',
+    visual_style      VARCHAR(50) DEFAULT '',
+    platform          VARCHAR(20),
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -67,6 +72,8 @@ CREATE TABLE IF NOT EXISTS platform_tokens (
     platform        VARCHAR(20) NOT NULL CHECK (platform IN ('facebook', 'instagram')),
     access_token    TEXT NOT NULL,
     page_id         VARCHAR(128),
+    page_name       VARCHAR(255),
+    account_username VARCHAR(255),
     token_expires   TIMESTAMP WITH TIME ZONE,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -76,13 +83,13 @@ CREATE TABLE IF NOT EXISTS platform_tokens (
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON platform_tokens(phone_number_id, platform);
 
 -- ============================================================================
--- CREDIT LEDGER (audit trail for every credit deduction)
+-- CREDIT LEDGER (audit trail for every credit transaction)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS credit_ledger (
     id            SERIAL PRIMARY KEY,
     user_id       VARCHAR(64) REFERENCES users(phone_number_id) ON DELETE CASCADE,
     action        VARCHAR(50) NOT NULL,
-    platform      VARCHAR(20) NOT NULL,
+    platform      VARCHAR(20),
     credits_spent INT NOT NULL,
     created_at    TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -110,13 +117,45 @@ CREATE INDEX IF NOT EXISTS idx_stats_user ON automation_stats(phone_number_id, p
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS promo_codes (
     code             VARCHAR(64) PRIMARY KEY,
-    discount_percent INT DEFAULT 100,
-    max_uses         INT DEFAULT 1,
+    credits_granted  INT DEFAULT 50,
+    max_uses         INT,
     current_uses     INT DEFAULT 0,
     active           BOOLEAN DEFAULT TRUE,
     expires_at       TIMESTAMP WITH TIME ZONE,
     created_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Default promo code
+INSERT INTO promo_codes (code, credits_granted, max_uses, active)
+VALUES ('CATALYX50', 50, NULL, TRUE)
+ON CONFLICT DO NOTHING;
+
+-- ============================================================================
+-- PROMO CODE USAGE (track which users used which codes)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS promo_usage (
+    id              SERIAL PRIMARY KEY,
+    phone_number_id VARCHAR(64) REFERENCES users(phone_number_id) ON DELETE CASCADE,
+    code            VARCHAR(64) NOT NULL,
+    credits_granted INT NOT NULL,
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (phone_number_id, code)
+);
+
+-- ============================================================================
+-- REFERRAL TRACKING
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS referrals (
+    id                  SERIAL PRIMARY KEY,
+    referrer_id         VARCHAR(64) REFERENCES users(phone_number_id) ON DELETE CASCADE,
+    referred_id         VARCHAR(64) REFERENCES users(phone_number_id) ON DELETE CASCADE,
+    referrer_credits    INT DEFAULT 50,
+    referred_credits    INT DEFAULT 50,
+    created_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (referred_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
 
 -- ============================================================================
 -- ENGAGED POSTS (deduplication — prevent replying to same comment twice)

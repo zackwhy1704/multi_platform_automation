@@ -59,8 +59,16 @@ def post_task(self, phone_number_id: str, content: str, media_url: str = None):
         payload = {"message": content, "access_token": access_token}
 
         if media_url:
-            endpoint = f"{GRAPH_API_BASE}/{page_id}/photos"
-            payload["url"] = media_url
+            # Detect video vs image by file extension
+            is_video = any(media_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi"))
+            if is_video:
+                endpoint = f"{GRAPH_API_BASE}/{page_id}/videos"
+                payload["file_url"] = media_url
+                payload["description"] = content
+                payload.pop("message", None)
+            else:
+                endpoint = f"{GRAPH_API_BASE}/{page_id}/photos"
+                payload["url"] = media_url
 
         resp = requests.post(endpoint, data=payload, timeout=30)
         resp.raise_for_status()

@@ -1,34 +1,71 @@
 """
 Subscription, credit management, and referral handlers.
 
-All payment UI uses Stripe's hosted pages:
-  - Stripe Checkout: subscription signup + promo codes
-  - Stripe Customer Portal: cancel, update payment method, view invoices
+Plans (Stripe Adaptive Pricing for SGD/MYR auto-conversion):
+  - Free:      30 credits on signup (+50 with referral)
+  - Starter:   $14.99/mo → 500 credits
+  - Pro:       $34.99/mo → 1,500 credits
+  - Business:  $79.99/mo → 5,000 credits
 
-Freemium: all users get 30 free credits. Subscribers get 500/month.
+Add-on credit packs (one-time):
+  - 100 credits:   $4.99
+  - 500 credits:   $24.99
+  - 1,500 credits: $74.99
+  - 5,000 credits: $200.00
 """
 
 import logging
 import stripe
 
 from shared.database import BotDatabase
-from shared.credits import CreditManager, MONTHLY_CREDITS
-from shared.config import STRIPE_SECRET_KEY, STRIPE_PRICE_ID, PAYMENT_SERVER_URL, FREE_SIGNUP_CREDITS
+from shared.credits import CreditManager, PLANS, CREDIT_PACKS, ACTION_COSTS
+from shared.config import (
+    STRIPE_SECRET_KEY,
+    STRIPE_PRICE_ID_STARTER,
+    STRIPE_PRICE_ID_PRO,
+    STRIPE_PRICE_ID_BUSINESS,
+    STRIPE_PRICE_ID_PACK_100,
+    STRIPE_PRICE_ID_PACK_500,
+    STRIPE_PRICE_ID_PACK_1500,
+    STRIPE_PRICE_ID_PACK_5000,
+    STRIPE_PRICE_ID,
+    PAYMENT_SERVER_URL,
+    FREE_SIGNUP_CREDITS,
+)
+from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
 
 logger = logging.getLogger(__name__)
 
 stripe.api_key = STRIPE_SECRET_KEY
 
+# Map plan names to Stripe price IDs
+PLAN_PRICE_IDS = {
+    "starter": STRIPE_PRICE_ID_STARTER or STRIPE_PRICE_ID,
+    "pro": STRIPE_PRICE_ID_PRO,
+    "business": STRIPE_PRICE_ID_BUSINESS,
+}
+
+# Map pack credits to Stripe price IDs
+PACK_PRICE_IDS = {
+    100: STRIPE_PRICE_ID_PACK_100,
+    500: STRIPE_PRICE_ID_PACK_500,
+    1500: STRIPE_PRICE_ID_PACK_1500,
+    5000: STRIPE_PRICE_ID_PACK_5000,
+}
+
 
 async def handle_credits(db: BotDatabase, sender: str, text: str):
-    """Show credit balance and usage breakdown."""
+    """Show credit balance and usage breakdown with tiered costs."""
     cm = CreditManager(db)
     summary = cm.get_usage_summary(sender)
     user = db.get_user(sender)
     is_sub = user and user.get("subscription_active")
 
-    plan_label = f"Subscriber ({MONTHLY_CREDITS}/month)" if is_sub else f"Free ({FREE_SIGNUP_CREDITS} signup credits)"
+    if is_sub:
+        plan_label = "Subscriber"
+    else:
+        plan_label = f"Free ({FREE_SIGNUP_CREDITS} signup credits)"
 
     await wa.send_text(
         sender,
@@ -36,19 +73,23 @@ async def handle_credits(db: BotDatabase, sender: str, text: str):
         f"Plan: {plan_label}\n"
         f"Remaining: *{summary['credits_remaining']}*\n"
         f"Used this period: {summary['credits_used']}\n\n"
-        f"*Breakdown:*\n"
-        f"  Posts: {summary['posts_spent']} credits\n"
-        f"  Replies: {summary['replies_spent']} credits\n\n"
-        f"*Costs:*\n"
-        f"  Post / Scheduled post: 5 credits\n"
-        f"  Comment reply: 3 credits\n\n"
+        f"*Credit Costs:*\n"
+        f"  Text post: {ACTION_COSTS['text_post']} credits\n"
+        f"  Stock image post: {ACTION_COSTS['stock_image_post']} credits\n"
+        f"  Own media post: {ACTION_COSTS['own_media_post']} credits\n"
+        f"  AI image post: {ACTION_COSTS['ai_image_post']} credits\n"
+        f"  AI video post: {ACTION_COSTS['ai_video_post']} credits\n"
+        f"  Comment reply: {ACTION_COSTS['comment_reply']} credits\n\n"
         + ("Credits reset on your next billing cycle." if is_sub else
-           "Want more credits? Send *subscribe* for 500/month or *referral* to earn free credits."),
+           "Want more credits?\n"
+           "  *subscribe* — Monthly plans from $14.99\n"
+           "  *buy* — One-time credit packs from $4.99\n"
+           "  *referral* — Earn 50 credits per friend"),
     )
 
 
 async def handle_subscribe(db: BotDatabase, sender: str, text: str):
-    """Create a Stripe Checkout session (hosted by Stripe) and send the link."""
+    """Show subscription plans and let user choose."""
     user = db.get_user(sender)
 
     if user and user.get("subscription_active"):
@@ -57,41 +98,138 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
         await wa.send_text(
             sender,
             f"You already have an active subscription!\n"
-            f"Credits remaining: *{balance}* / {MONTHLY_CREDITS}\n\n"
+            f"Credits remaining: *{balance}*\n\n"
             f"Send *cancel* to manage your subscription.",
         )
         return
 
-    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
+    if not STRIPE_SECRET_KEY:
         await wa.send_text(sender, "Payment system is not configured yet. Please contact support.")
         return
 
-    try:
-        # Stripe Checkout handles ALL payment UI:
-        # - Card input, validation, 3D Secure
-        # - Promo code entry (allow_promotion_codes=True)
-        # - Tax collection, address collection
-        # - PCI compliance — we never touch card data
-        session = stripe.checkout.Session.create(
-            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
-            mode="subscription",
-            success_url=f"{PAYMENT_SERVER_URL}/payment/success",
-            cancel_url=f"{PAYMENT_SERVER_URL}/payment/cancel",
-            client_reference_id=sender,
-            metadata={"phone_number_id": sender},
-            allow_promotion_codes=True,
+    # Show plan options
+    rows = []
+    for key in ("starter", "pro", "business"):
+        plan = PLANS[key]
+        price_id = PLAN_PRICE_IDS.get(key, "")
+        if price_id:
+            rows.append({
+                "id": f"plan_{key}",
+                "title": f"{plan['name']} — ${plan['price_usd']}/mo",
+                "description": f"{plan['credits']:,} credits/month",
+            })
+
+    if rows:
+        await wa.send_interactive_list(
+            sender,
+            "*Choose a Subscription Plan*\n\n"
+            f"*Starter* — ${PLANS['starter']['price_usd']}/mo → {PLANS['starter']['credits']:,} credits\n"
+            f"*Pro* — ${PLANS['pro']['price_usd']}/mo → {PLANS['pro']['credits']:,} credits\n"
+            f"*Business* — ${PLANS['business']['price_usd']}/mo → {PLANS['business']['credits']:,} credits\n\n"
+            "Prices shown in USD. Local currency (SGD/MYR) shown at checkout.\n"
+            "Have a promo code? Enter it at checkout.",
+            "Choose Plan",
+            [{"title": "Plans", "rows": rows}],
         )
+        db.set_conversation_state(sender, ConversationState.AWAITING_PACK_CHOICE, {"type": "plan"})
+    else:
+        # Fallback: single plan (legacy)
+        await _create_checkout(sender, STRIPE_PRICE_ID, "subscription")
+
+
+async def handle_buy_credits(db: BotDatabase, sender: str, text: str):
+    """Show credit pack options for one-time purchase."""
+    if not STRIPE_SECRET_KEY:
+        await wa.send_text(sender, "Payment system is not configured yet. Please contact support.")
+        return
+
+    rows = []
+    for pack in CREDIT_PACKS:
+        price_id = PACK_PRICE_IDS.get(pack["credits"], "")
+        if price_id:
+            rows.append({
+                "id": f"pack_{pack['credits']}",
+                "title": f"{pack['label']} — ${pack['price_usd']}",
+                "description": f"${pack['price_usd']:.2f} one-time",
+            })
+
+    if not rows:
+        await wa.send_text(sender, "Credit packs are not configured yet. Please contact support.")
+        return
+
+    await wa.send_interactive_list(
+        sender,
+        "*Credit Packs (One-Time Purchase)*\n\n"
+        "Top up your credits instantly:\n"
+        f"  100 credits — $4.99\n"
+        f"  500 credits — $24.99\n"
+        f"  1,500 credits — $74.99\n"
+        f"  5,000 credits — $200.00\n\n"
+        "Prices in USD. Local currency at checkout.",
+        "Choose Pack",
+        [{"title": "Credit Packs", "rows": rows}],
+    )
+    db.set_conversation_state(sender, ConversationState.AWAITING_PACK_CHOICE, {"type": "pack"})
+
+
+async def handle_pack_step(db: BotDatabase, sender: str, text: str,
+                           state: ConversationState, data: dict, **kwargs):
+    """Handle plan/pack selection from interactive list."""
+    choice = text.lower().strip()
+    choice_type = data.get("type", "pack")
+
+    db.clear_conversation_state(sender)
+
+    if choice_type == "plan":
+        # Plan subscription selection
+        plan_key = choice.replace("plan_", "")
+        if plan_key not in PLAN_PRICE_IDS:
+            await wa.send_text(sender, "Please choose a valid plan.")
+            return
+        price_id = PLAN_PRICE_IDS[plan_key]
+        if not price_id:
+            await wa.send_text(sender, f"The {plan_key} plan is not configured yet.")
+            return
+        await _create_checkout(sender, price_id, "subscription", plan_key)
+
+    elif choice_type == "pack":
+        # Credit pack selection
+        pack_credits_str = choice.replace("pack_", "")
+        try:
+            pack_credits = int(pack_credits_str)
+        except ValueError:
+            await wa.send_text(sender, "Please choose a valid credit pack.")
+            return
+        price_id = PACK_PRICE_IDS.get(pack_credits, "")
+        if not price_id:
+            await wa.send_text(sender, "That pack is not configured yet.")
+            return
+        await _create_checkout(sender, price_id, "payment", f"pack_{pack_credits}")
+
+
+async def _create_checkout(sender: str, price_id: str, mode: str, label: str = ""):
+    """Create a Stripe Checkout session with Adaptive Pricing enabled."""
+    try:
+        session_kwargs = {
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "mode": mode,
+            "success_url": f"{PAYMENT_SERVER_URL}/payment/success",
+            "cancel_url": f"{PAYMENT_SERVER_URL}/payment/cancel",
+            "client_reference_id": sender,
+            "metadata": {"phone_number_id": sender, "purchase_type": label},
+            "allow_promotion_codes": True,
+            # Stripe Adaptive Pricing: auto-converts to local currency (SGD/MYR)
+            # Customer sees prices in their local currency; FX fee (2-4%) included
+            "adaptive_pricing": {"enabled": True},
+        }
+
+        session = stripe.checkout.Session.create(**session_kwargs)
 
         await wa.send_text(
             sender,
-            f"*Upgrade to AI Automation Pro*\n\n"
-            f"*500 credits/month* — automate your social media:\n"
-            f"  - Up to 100 AI posts/month\n"
-            f"  - Up to 166 auto-replies/month\n"
-            f"  - Priority content generation\n"
-            f"  - Credits reset every billing cycle\n\n"
-            f"Have a promo code? You can enter it at checkout.\n\n"
-            f"Subscribe here:\n{session.url}",
+            f"Complete your purchase here:\n{session.url}\n\n"
+            "You'll see the price in your local currency at checkout.\n"
+            "Have a promo code? Enter it on the checkout page.",
         )
     except Exception as e:
         logger.error("Stripe checkout error for %s: %s", sender, e)
@@ -99,14 +237,7 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
 
 
 async def handle_cancel(db: BotDatabase, sender: str, text: str):
-    """Open Stripe Customer Portal for subscription management.
-
-    Stripe's hosted portal handles:
-      - Cancel subscription (immediate or end-of-period)
-      - Update payment method
-      - View invoice history
-      - Resume cancelled subscriptions
-    """
+    """Open Stripe Customer Portal for subscription management."""
     user = db.get_user(sender)
 
     if not user or not user.get("subscription_active"):
@@ -119,8 +250,6 @@ async def handle_cancel(db: BotDatabase, sender: str, text: str):
         return
 
     try:
-        # Use Stripe Customer Portal with cancel flow deep link
-        # This takes the user directly to the cancellation page
         sub_id = user.get("stripe_subscription_id")
         flow_data = None
         if sub_id:

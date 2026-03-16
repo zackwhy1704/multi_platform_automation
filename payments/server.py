@@ -193,18 +193,22 @@ def _find_user_by_stripe(customer_id: str, subscription_id: str = None):
 
 
 def _handle_checkout_completed(session):
-    """Activate subscription on successful checkout (webhook = source of truth)."""
+    """Handle successful checkout — subscriptions OR one-time credit pack purchases."""
     try:
         customer_id = session.get("customer")
         subscription_id = session.get("subscription")
+        mode = session.get("mode")  # "subscription" or "payment"
         phone = session.get("client_reference_id") or session.get("metadata", {}).get("phone_number_id")
+        metadata = session.get("metadata", {})
+        purchase_type = metadata.get("purchase_type", "")
 
         if not phone:
             logger.warning("checkout.session.completed missing phone: %s", session.get("id"))
             return
 
-        days = 30
-        if subscription_id:
+        if mode == "subscription" and subscription_id:
+            # --- Subscription purchase ---
+            days = 30
             try:
                 sub = stripe.Subscription.retrieve(subscription_id)
                 period_end = _get_subscription_period_end(sub)
@@ -213,14 +217,42 @@ def _handle_checkout_completed(session):
             except Exception:
                 pass
 
-        db.activate_subscription(phone, stripe_customer_id=customer_id, stripe_subscription_id=subscription_id, days=days)
+            db.activate_subscription(phone, stripe_customer_id=customer_id, stripe_subscription_id=subscription_id, days=days)
 
-        _notify(
-            phone,
-            "Payment Successful!\n\n"
-            f"Your subscription is ACTIVE with *{MONTHLY_CREDITS} credits*.\n\n"
-            "Send *post* to start automating!",
-        )
+            _notify(
+                phone,
+                "Payment Successful!\n\n"
+                f"Your subscription is ACTIVE with *{MONTHLY_CREDITS} credits*.\n\n"
+                "Send *post* to start automating!",
+            )
+
+        elif mode == "payment" and purchase_type.startswith("pack_"):
+            # --- One-time credit pack purchase ---
+            try:
+                pack_credits = int(purchase_type.replace("pack_", ""))
+            except ValueError:
+                logger.error("Invalid pack purchase_type: %s", purchase_type)
+                return
+
+            # Store stripe_customer_id for future lookups
+            if customer_id:
+                db.execute_query(
+                    "UPDATE users SET stripe_customer_id = COALESCE(stripe_customer_id, %s) WHERE phone_number_id = %s",
+                    (customer_id, phone),
+                )
+
+            db.grant_credits(phone, pack_credits, reason=f"credit_pack_{pack_credits}")
+
+            _notify(
+                phone,
+                f"Payment Successful!\n\n"
+                f"*{pack_credits:,} credits* have been added to your account.\n\n"
+                "Send *credits* to check your balance.",
+            )
+
+        else:
+            logger.warning("Unhandled checkout mode=%s for session %s", mode, session.get("id"))
+
     except Exception as e:
         logger.error("Error in checkout.session.completed: %s", e)
 

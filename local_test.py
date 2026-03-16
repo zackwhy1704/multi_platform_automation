@@ -83,6 +83,8 @@ class LocalBotDatabase:
                 offerings TEXT DEFAULT '[]',
                 business_goals TEXT DEFAULT '[]',
                 tone TEXT DEFAULT '[]',
+                content_style TEXT DEFAULT '',
+                visual_style TEXT DEFAULT '',
                 platform TEXT DEFAULT '',
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
@@ -94,6 +96,8 @@ class LocalBotDatabase:
                 platform TEXT NOT NULL,
                 access_token TEXT NOT NULL,
                 page_id TEXT,
+                page_name TEXT,
+                account_username TEXT,
                 token_expires TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now')),
@@ -268,13 +272,15 @@ class LocalBotDatabase:
         try:
             self.create_user(phone_number_id)
             self.execute_query(
-                """INSERT OR REPLACE INTO user_profiles (phone_number_id, industry, offerings, business_goals, tone, platform)
-                VALUES (%s, %s, %s, %s, %s, %s)""",
+                """INSERT OR REPLACE INTO user_profiles (phone_number_id, industry, offerings, business_goals, tone, content_style, visual_style, platform)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
                 (phone_number_id,
                  json.dumps(profile_data.get("industry", [])),
                  json.dumps(profile_data.get("offerings", [])),
                  json.dumps(profile_data.get("business_goals", [])),
                  json.dumps(profile_data.get("tone", [])),
+                 profile_data.get("content_style", ""),
+                 profile_data.get("visual_style", ""),
                  profile_data.get("platform", "")),
             )
             return True
@@ -286,12 +292,13 @@ class LocalBotDatabase:
         return self.execute_query("SELECT * FROM user_profiles WHERE phone_number_id = %s", (phone_number_id,), fetch="one")
 
     # --- Platform Tokens ---
-    def save_platform_token(self, phone_number_id: str, platform: str, access_token: str, page_id: str = None) -> bool:
+    def save_platform_token(self, phone_number_id: str, platform: str, access_token: str,
+                            page_id: str = None, page_name: str = None, account_username: str = None) -> bool:
         try:
             self.execute_query(
-                """INSERT OR REPLACE INTO platform_tokens (phone_number_id, platform, access_token, page_id)
-                VALUES (%s, %s, %s, %s)""",
-                (phone_number_id, platform, access_token, page_id),
+                """INSERT OR REPLACE INTO platform_tokens (phone_number_id, platform, access_token, page_id, page_name, account_username)
+                VALUES (%s, %s, %s, %s, %s, %s)""",
+                (phone_number_id, platform, access_token, page_id, page_name, account_username),
             )
             return True
         except Exception as e:
@@ -300,9 +307,13 @@ class LocalBotDatabase:
 
     def get_platform_token(self, phone_number_id: str, platform: str) -> Optional[Dict]:
         return self.execute_query(
-            "SELECT access_token, page_id FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
+            "SELECT access_token, page_id, page_name, account_username FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
             (phone_number_id, platform), fetch="one",
         )
+
+    def delete_platform_token(self, phone_number_id: str, platform: str) -> bool:
+        self.execute_query("DELETE FROM platform_tokens WHERE phone_number_id = %s AND platform = %s", (phone_number_id, platform))
+        return True
 
     # --- Credits ---
     def grant_credits(self, phone_number_id: str, amount: int, reason: str = "bonus") -> bool:
@@ -508,7 +519,7 @@ class LocalCreditManager(shared.credits.CreditManager):
         balance = self.get_balance(user_id)
         r = self.db.execute_query(
             """SELECT COALESCE(SUM(CASE WHEN credits_spent > 0 THEN credits_spent END), 0) AS total_spent,
-               COALESCE(SUM(CASE WHEN action IN ('post','scheduled_post') AND credits_spent > 0 THEN credits_spent END), 0) AS posts_spent,
+               COALESCE(SUM(CASE WHEN action IN ('text_post','stock_image_post','own_media_post','ai_image_post','ai_video_post','post','scheduled_post','scheduled_text','scheduled_stock','scheduled_own_media','scheduled_ai_image','scheduled_ai_video') AND credits_spent > 0 THEN credits_spent END), 0) AS posts_spent,
                COALESCE(SUM(CASE WHEN action = 'comment_reply' AND credits_spent > 0 THEN credits_spent END), 0) AS replies_spent,
                COUNT(CASE WHEN credits_spent > 0 THEN 1 END) AS total_actions
             FROM credit_ledger WHERE user_id = %s""",
@@ -547,7 +558,10 @@ workers.celery_app.celery_app = MockCeleryApp()
 # Now import and run the actual FastAPI app
 # ---------------------------------------------------------------------------
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, FileResponse
 from gateway.router import handle_incoming_message
+from gateway.handlers.oauth import handle_oauth_callback, OAUTH_SUCCESS_HTML, OAUTH_ERROR_HTML
+from gateway.media import MEDIA_DIR
 from shared.config import WHATSAPP_VERIFY_TOKEN
 
 app = FastAPI(title="Local Test — AI Automation Service")
@@ -587,6 +601,43 @@ async def receive_webhook(request: Request):
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# OAuth callback — Facebook redirects here after user grants permissions
+# ---------------------------------------------------------------------------
+@app.get("/auth/callback")
+async def oauth_callback(request: Request):
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
+
+    if error:
+        logger.warning("OAuth error: %s — %s", error, request.query_params.get("error_description"))
+        return HTMLResponse(OAUTH_ERROR_HTML)
+
+    if not code or not state:
+        return HTMLResponse(OAUTH_ERROR_HTML)
+
+    result = await handle_oauth_callback(code, state, local_db)
+    if result.get("success"):
+        return HTMLResponse(OAUTH_SUCCESS_HTML)
+    return HTMLResponse(OAUTH_ERROR_HTML)
+
+
+# ---------------------------------------------------------------------------
+# Media serving — serve downloaded WhatsApp media files publicly
+# (needed for Facebook/Instagram Graph API to access uploaded images)
+# ---------------------------------------------------------------------------
+@app.get("/media/{filename}")
+async def serve_media(filename: str):
+    file_path = os.path.join(MEDIA_DIR, filename)
+    if not os.path.exists(file_path):
+        return Response(status_code=404)
+    return FileResponse(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Debug & health endpoints
+# ---------------------------------------------------------------------------
 @app.get("/health")
 async def health():
     return {"status": "ok", "mode": "local_test"}
@@ -607,8 +658,17 @@ async def debug_reset():
     return {"status": "database reset"}
 
 
+@app.get("/debug/media")
+async def debug_media():
+    """Debug endpoint — list downloaded media files."""
+    files = os.listdir(MEDIA_DIR) if os.path.exists(MEDIA_DIR) else []
+    return {"media_dir": MEDIA_DIR, "files": files}
+
+
 if __name__ == "__main__":
     import uvicorn
+
+    ngrok_domain = os.getenv("PUBLIC_BASE_URL", "")
 
     print("\n" + "=" * 60)
     print("  AI Automation Service — LOCAL TEST SERVER")
@@ -616,16 +676,24 @@ if __name__ == "__main__":
     print(f"\n  WhatsApp Token: {'SET' if os.getenv('WHATSAPP_TOKEN') else 'NOT SET'}")
     print(f"  Verify Token:   {os.getenv('WHATSAPP_VERIFY_TOKEN', 'my_verify_token')}")
     print(f"  Anthropic Key:  {'SET' if os.getenv('ANTHROPIC_API_KEY') else 'NOT SET'}")
+    print(f"  OpenAI Key:     {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET (AI image disabled)'}")
+    print(f"  Kling Keys:     {'SET' if os.getenv('KLING_ACCESS_KEY') else 'NOT SET (AI video disabled)'}")
+    print(f"  Pexels Key:     {'SET' if os.getenv('PEXELS_API_KEY') else 'NOT SET (stock images disabled)'}")
+    print(f"  FB App ID:      {'SET' if os.getenv('FB_APP_ID') else 'NOT SET (OAuth disabled, manual token mode)'}")
     print(f"  Stripe Key:     {'SET' if os.getenv('STRIPE_SECRET_KEY') else 'NOT SET'}")
     print(f"\n  Database: SQLite ({DB_FILE})")
     print(f"  Celery:   MOCKED (tasks logged only)")
-    print(f"\n  Debug endpoints:")
-    print(f"    GET /debug/users  — view all users")
-    print(f"    GET /debug/reset  — reset database")
-    print(f"\n  Next steps:")
-    print(f"    1. Run: ngrok http 8000")
-    print(f"    2. Set Meta webhook URL to: https://<ngrok>/webhook")
-    print(f"    3. Send a WhatsApp message to your business number")
+    print(f"  Media:    {MEDIA_DIR}")
+    print(f"\n  Endpoints:")
+    print(f"    POST /webhook      — WhatsApp webhook")
+    print(f"    GET  /auth/callback — Facebook OAuth callback")
+    print(f"    GET  /media/{{file}} — Serve media files")
+    print(f"    GET  /debug/users  — View all users")
+    print(f"    GET  /debug/reset  — Reset database")
+    print(f"    GET  /debug/media  — List media files")
+    if ngrok_domain:
+        print(f"\n  Public URL: {ngrok_domain}")
+        print(f"  OAuth callback: {ngrok_domain}/auth/callback")
     print("=" * 60 + "\n")
 
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -126,17 +126,20 @@ class BotDatabase:
         try:
             self.create_user(phone_number_id)
             self.execute_query(
-                """INSERT INTO user_profiles (phone_number_id, industry, offerings, business_goals, tone, platform)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                """INSERT INTO user_profiles (phone_number_id, industry, offerings, business_goals, tone, content_style, visual_style, platform)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone_number_id) DO UPDATE SET
                     industry = EXCLUDED.industry, offerings = EXCLUDED.offerings,
                     business_goals = EXCLUDED.business_goals, tone = EXCLUDED.tone,
+                    content_style = EXCLUDED.content_style, visual_style = EXCLUDED.visual_style,
                     platform = EXCLUDED.platform, updated_at = CURRENT_TIMESTAMP""",
                 (phone_number_id,
                  profile_data.get("industry", []),
                  profile_data.get("offerings", []),
                  profile_data.get("business_goals", []),
                  profile_data.get("tone", []),
+                 profile_data.get("content_style", ""),
+                 profile_data.get("visual_style", ""),
                  profile_data.get("platform", "")),
             )
             return True
@@ -151,17 +154,20 @@ class BotDatabase:
     # PLATFORM TOKENS (OAuth only — no passwords)
     # =========================================================================
 
-    def save_platform_token(self, phone_number_id: str, platform: str, access_token: str, page_id: str = None) -> bool:
+    def save_platform_token(self, phone_number_id: str, platform: str, access_token: str,
+                            page_id: str = None, page_name: str = None, account_username: str = None) -> bool:
         try:
             self.create_user(phone_number_id)
             self.execute_query(
-                """INSERT INTO platform_tokens (phone_number_id, platform, access_token, page_id)
-                VALUES (%s, %s, %s, %s)
+                """INSERT INTO platform_tokens (phone_number_id, platform, access_token, page_id, page_name, account_username)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone_number_id, platform) DO UPDATE SET
                     access_token = EXCLUDED.access_token,
                     page_id = COALESCE(EXCLUDED.page_id, platform_tokens.page_id),
+                    page_name = COALESCE(EXCLUDED.page_name, platform_tokens.page_name),
+                    account_username = COALESCE(EXCLUDED.account_username, platform_tokens.account_username),
                     updated_at = CURRENT_TIMESTAMP""",
-                (phone_number_id, platform, access_token, page_id),
+                (phone_number_id, platform, access_token, page_id, page_name, account_username),
             )
             return True
         except Exception as e:
@@ -170,9 +176,21 @@ class BotDatabase:
 
     def get_platform_token(self, phone_number_id: str, platform: str) -> Optional[Dict]:
         return self.execute_query(
-            "SELECT access_token, page_id FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
+            "SELECT access_token, page_id, page_name, account_username FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
             (phone_number_id, platform), fetch="one",
         )
+
+    def delete_platform_token(self, phone_number_id: str, platform: str) -> bool:
+        """Remove a platform connection (logout)."""
+        try:
+            self.execute_query(
+                "DELETE FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
+                (phone_number_id, platform),
+            )
+            return True
+        except Exception as e:
+            logger.error("Error deleting %s token for %s: %s", platform, phone_number_id, e)
+            return False
 
     # =========================================================================
     # CREDITS (Freemium)

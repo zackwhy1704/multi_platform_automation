@@ -25,6 +25,8 @@ screenshots/
 cookies/
 logs/
 *.log
+*.db
+media/
 
 # OS
 .DS_Store

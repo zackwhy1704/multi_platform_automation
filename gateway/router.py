@@ -1,5 +1,6 @@
 """
 Message router — dispatches incoming WhatsApp messages to the right handler.
+Supports text, interactive (buttons/lists), and media (image/video) messages.
 """
 
 import logging
@@ -14,13 +15,16 @@ COMMANDS = {
     "start": onboarding.handle_start,
     "help": onboarding.handle_help,
     "post": actions.handle_post,
+    "auto": actions.handle_auto,
     "schedule": actions.handle_schedule,
     "reply": actions.handle_reply,
     "stats": actions.handle_stats,
     "credits": subscription.handle_credits,
     "subscribe": subscription.handle_subscribe,
+    "buy": subscription.handle_buy_credits,
     "cancel": subscription.handle_cancel,
     "setup": settings.handle_setup,
+    "disconnect": settings.handle_disconnect,
     "settings": settings.handle_settings,
     "referral": subscription.handle_referral,
 }
@@ -31,6 +35,8 @@ STATE_HANDLERS = {
     ConversationState.ONBOARDING_OFFERINGS: onboarding.handle_onboarding_step,
     ConversationState.ONBOARDING_GOALS: onboarding.handle_onboarding_step,
     ConversationState.ONBOARDING_TONE: onboarding.handle_onboarding_step,
+    ConversationState.ONBOARDING_CONTENT_STYLE: onboarding.handle_onboarding_step,
+    ConversationState.ONBOARDING_VISUAL_STYLE: onboarding.handle_onboarding_step,
     ConversationState.ONBOARDING_PLATFORM: onboarding.handle_onboarding_step,
     # Promo code
     ConversationState.AWAITING_PROMO_CODE: onboarding.handle_promo_step,
@@ -38,11 +44,28 @@ STATE_HANDLERS = {
     ConversationState.SETUP_PLATFORM: settings.handle_setup_step,
     ConversationState.SETUP_FB_TOKEN: settings.handle_setup_step,
     ConversationState.SETUP_IG_TOKEN: settings.handle_setup_step,
-    # Actions
+    # Actions — posting flow
     ConversationState.AWAITING_POST_PLATFORM: actions.handle_post_step,
+    ConversationState.AWAITING_POST_TYPE: actions.handle_post_step,
+    ConversationState.AWAITING_POST_MEDIA: actions.handle_post_step,
+    ConversationState.AWAITING_POST_CAPTION: actions.handle_post_step,
+    ConversationState.AWAITING_POST_CONFIRM: actions.handle_post_step,
     ConversationState.AWAITING_POST_CONTENT: actions.handle_post_step,
     ConversationState.AWAITING_SCHEDULE_TIME: actions.handle_post_step,
+    # Weekly auto-post
+    ConversationState.AWAITING_AUTO_PLATFORM: actions.handle_auto_step,
+    ConversationState.AWAITING_AUTO_COUNT: actions.handle_auto_step,
+    ConversationState.AWAITING_AUTO_TYPE: actions.handle_auto_step,
+    ConversationState.AWAITING_AUTO_CONFIRM: actions.handle_auto_step,
+    # Engagement
     ConversationState.AWAITING_REPLY_PLATFORM: actions.handle_reply_step,
+    # Credit packs
+    ConversationState.AWAITING_PACK_CHOICE: subscription.handle_pack_step,
+}
+
+# States that accept media messages (photo/video)
+MEDIA_ACCEPTING_STATES = {
+    ConversationState.AWAITING_POST_MEDIA,
 }
 
 
@@ -54,9 +77,13 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
     db.create_user(sender, phone_number=sender, display_name=contact_name)
     db.update_last_seen(sender)
 
+    # --- Extract text from message ---
     text = ""
+    media_info = None
+
     if msg_type == "text":
         text = message.get("text", {}).get("body", "").strip()
+
     elif msg_type == "interactive":
         interactive = message.get("interactive", {})
         if interactive.get("type") == "button_reply":
@@ -64,22 +91,137 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
         elif interactive.get("type") == "list_reply":
             text = interactive.get("list_reply", {}).get("id", "")
 
-    if not text:
-        await wa.send_text(sender, "Sorry, I can only process text messages and button replies right now.")
+    elif msg_type in ("image", "video"):
+        # Media message — download it
+        media_obj = message.get(msg_type, {})
+        media_id = media_obj.get("id")
+        caption = media_obj.get("caption", "")
+
+        if media_id:
+            from gateway.media import download_whatsapp_media
+            media_info = await download_whatsapp_media(media_id)
+
+        # If media has a caption, use it as text
+        text = caption.strip() if caption else ""
+
+    elif msg_type == "document":
+        await wa.send_text(
+            sender,
+            "I can process *photos* and *videos* but not documents.\n"
+            "Please send your file as a photo or video instead.",
+        )
         return
+
+    # --- Route the message ---
 
     # Check conversation state first
     conv = db.get_conversation_state(sender)
     if conv and conv["state"] != ConversationState.IDLE:
+        state = ConversationState(conv["state"])
+
+        # Cancel command works in any state
         if text.lower() in ("cancel", "exit", "quit"):
             db.clear_conversation_state(sender)
             await wa.send_text(sender, "Cancelled. Send *help* to see available commands.")
             return
-        state = ConversationState(conv["state"])
+
         handler = STATE_HANDLERS.get(state)
         if handler:
-            await handler(db=db, sender=sender, text=text, state=state, data=conv.get("data") or {})
+            # If this state accepts media, pass media_info
+            if state in MEDIA_ACCEPTING_STATES and media_info:
+                await handler(
+                    db=db, sender=sender, text=text,
+                    state=state, data=conv.get("data") or {},
+                    media_info=media_info,
+                )
+                return
+            elif state in MEDIA_ACCEPTING_STATES and not media_info and not text:
+                # User sent something else (not media and not text) while we expect media
+                await wa.send_text(
+                    sender,
+                    "Please send a *photo or video* for your post.\n"
+                    "Or type *cancel* to go back.",
+                )
+                return
+            elif text or media_info:
+                # For non-media states, we need text
+                if not text and media_info:
+                    # User sent media but we're not in a media-accepting state
+                    await wa.send_text(
+                        sender,
+                        "I received your media but I'm not expecting it right now.\n"
+                        "Type *cancel* to start over, or continue with the current step.",
+                    )
+                    return
+                await handler(
+                    db=db, sender=sender, text=text,
+                    state=state, data=conv.get("data") or {},
+                )
+                return
+
+    # No active conversation state — handle as command or new message
+
+    # If user sent media without being in a flow, offer to create a post
+    if media_info and not text:
+        profile = db.get_user_profile(sender)
+        if not profile:
+            await onboarding.handle_start(db=db, sender=sender, text="")
             return
+
+        # Auto-start posting flow with this media
+        fb_token = db.get_platform_token(sender, "facebook")
+        ig_token = db.get_platform_token(sender, "instagram")
+
+        if not fb_token and not ig_token:
+            await wa.send_text(
+                sender,
+                "Nice photo/video! To post it, first connect your account.\n"
+                "Send *setup* to connect Facebook or Instagram.",
+            )
+            return
+
+        # Save media and ask which platform
+        data = {
+            "media_filename": media_info["filename"],
+            "media_mime": media_info["mime_type"],
+            "post_type": "own_media",
+        }
+
+        if fb_token and ig_token:
+            db.set_conversation_state(sender, ConversationState.AWAITING_POST_PLATFORM, data)
+            await wa.send_interactive_buttons(
+                sender,
+                "Got your media! Which platform should I post it on?",
+                [
+                    {"id": "facebook", "title": "Facebook"},
+                    {"id": "instagram", "title": "Instagram"},
+                ],
+            )
+        elif fb_token:
+            data["platform"] = "facebook"
+            db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
+            await wa.send_text(
+                sender,
+                "Got your media! Write a *caption* for your Facebook post.\n\n"
+                "Or type *ai* to generate one automatically.",
+            )
+        else:
+            data["platform"] = "instagram"
+            db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
+            await wa.send_text(
+                sender,
+                "Got your media! Write a *caption* for your Instagram post.\n\n"
+                "Or type *ai* to generate one automatically.",
+            )
+        return
+
+    if not text:
+        await wa.send_text(
+            sender,
+            "I can process *text messages*, *button replies*, *photos*, and *videos*.\n"
+            "Send *help* to see what I can do.",
+        )
+        return
 
     # Check if new user (no profile) — auto-start onboarding
     command_word = text.lower().split()[0] if text else ""
@@ -96,12 +238,15 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
     await wa.send_text(
         sender,
         "I didn't understand that. Here are the commands you can use:\n\n"
-        "*post* — Create a post\n"
+        "*post* — Create a post (photo/video/text)\n"
+        "*auto* — Auto-generate posts for the week\n"
         "*schedule* — Schedule a post\n"
         "*reply* — Auto-reply to comments\n"
         "*stats* — View your stats\n"
         "*credits* — Check credit balance\n"
+        "*buy* — Purchase credit packs\n"
         "*setup* — Connect a platform\n"
+        "*disconnect* — Switch/remove account\n"
         "*settings* — View/update settings\n"
         "*subscribe* — Upgrade your plan\n"
         "*referral* — Get your referral code\n"

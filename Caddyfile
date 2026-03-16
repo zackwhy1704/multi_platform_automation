@@ -1,15 +1,27 @@
 {$DOMAIN:localhost} {
-    # WhatsApp webhook
-    handle /webhook* {
-        reverse_proxy gateway:8000
+    # Stripe webhook — must be BEFORE /webhook* to avoid conflict
+    handle /webhook/stripe {
+        reverse_proxy payment:5000
     }
 
-    # Payment pages and Stripe webhooks
+    # Payment pages (success, cancel, portal-return)
     handle /payment/* {
         reverse_proxy payment:5000
     }
-    handle /webhook/stripe {
-        reverse_proxy payment:5000
+
+    # WhatsApp webhook (GET verify + POST messages)
+    handle /webhook {
+        reverse_proxy gateway:8000
+    }
+
+    # OAuth callback (Facebook/Instagram)
+    handle /auth/* {
+        reverse_proxy gateway:8000
+    }
+
+    # Media serving (images/videos for Graph API)
+    handle /media/* {
+        reverse_proxy gateway:8000
     }
 
     # Health checks
