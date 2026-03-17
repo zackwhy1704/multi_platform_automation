@@ -93,8 +93,130 @@ def _fmt_selections(items: list[str]) -> str:
     return "\n".join(f"  ✅ {x}" for x in items)
 
 
-async def _confirm_selection(sender: str, step_label: str, selections: list[str], add_more_id: str, done_id: str):
-    """Show current selections and offer Add More / Done buttons."""
+# ── ReAct Validation: Reason about selections and challenge inconsistencies ─────
+
+def _analyze_selections(selections: list[str], field: str, context: dict) -> tuple[bool, str | None]:
+    """
+    ReAct reasoning: Analyze selections for logical consistency.
+    Returns (is_valid, challenge_message)
+
+    If challenge_message is not None, bot will ask for confirmation.
+    """
+    if not selections:
+        return True, None
+
+    # ── Cross-field validation ────────────────────────────────────────────
+
+    if field == "tone":
+        # Tone + Content Style validation
+        content_style = context.get("content_style", [])
+
+        # Thought Leader + Humorous/Memes is unconventional
+        if "Thought Leader" in selections and "Humorous / Memes" in content_style:
+            return False, (
+                "🤔 *Think this through:* Thought Leader tone usually avoids memes/humour "
+                "to maintain authority.\n\n"
+                "Are you mixing serious insights with comedy? That's *bold* but possible! "
+                "Confirm to continue."
+            )
+
+        # Professional + Behind the Scenes can seem mismatched
+        if "Professional" in selections and "Behind the Scenes" in content_style:
+            return False, (
+                "💭 *Quick check:* Professional tone + Behind the Scenes content can feel "
+                "informal.\n\n"
+                "Are you showing a polished/formal look behind the scenes? "
+                "Or would Casual tone work better? Confirm to continue."
+            )
+
+    if field == "content_style":
+        # Content Style + Tone validation
+        tone = context.get("tone", [])
+        industry = context.get("industry", [])
+
+        # Humorous/Memes + Finance is risky
+        if "Humorous / Memes" in selections and "Finance / Insurance" in industry:
+            return False, (
+                "⚠️ *Reality check:* Finance & Insurance usually demand trust, not humour.\n\n"
+                "Are you a fun fintech/insurance brand that breaks stereotypes? "
+                "Or should you reconsider? Confirm to continue."
+            )
+
+        # Meme Style + Professional tone
+        if "Meme Style" in selections and "Professional" in tone:
+            return False, (
+                "🤔 *Heads up:* Meme style is inherently casual, but you selected Professional tone.\n\n"
+                "Are you intentionally mixing? Or should you pick Casual tone instead? "
+                "Confirm to continue."
+            )
+
+        # Product Showcase + Humorous memes
+        if "Product Showcase" in selections and "Humorous / Memes" in selections:
+            return False, (
+                "💡 *Thought:* Product Showcase + Humorous memes work, but need balance.\n\n"
+                "Heavy memes might bury your products. Confirm you want both."
+            )
+
+    if field == "visual_style":
+        # Visual Style + Content Style validation
+        content_style = context.get("content_style", [])
+
+        # Photorealistic + Meme Style conflict
+        if "Photorealistic" in selections and "Meme Style" in content_style:
+            return False, (
+                "🎨 *Visual check:* Photorealistic (real photos) + Meme Style don't typically mix.\n\n"
+                "Did you mean: Realistic photos with meme-format text? Or reconsider? "
+                "Confirm to continue."
+            )
+
+        # Cartoon + Photorealistic can be inconsistent
+        if len([x for x in selections if x in ("Cartoon / Illustrated", "Photorealistic")]) == 2:
+            return False, (
+                "🎨 *Style check:* Cartoon and Photorealistic are opposites.\n\n"
+                "Are you using different styles for different post types? "
+                "Confirm if yes."
+            )
+
+        # Meme Style + Professional tone
+        tone = context.get("tone", [])
+        if "Meme Style" in selections and "Professional" in tone:
+            return False, (
+                "⚠️ *Mix alert:* Meme Style is casual, but you chose Professional tone.\n\n"
+                "These often conflict. Confirm you're mixing styles intentionally."
+            )
+
+    return True, None
+
+
+async def _confirm_selection(
+    sender: str,
+    step_label: str,
+    selections: list[str],
+    add_more_id: str,
+    done_id: str,
+    field: str = "",
+    context: dict | None = None,
+):
+    """Show current selections and offer Add More / Done buttons.
+    If ReAct validation finds issues, ask for confirmation first."""
+    context = context or {}
+
+    # Validate with ReAct reasoning
+    is_valid, challenge = _analyze_selections(selections, field, context)
+
+    if not is_valid and challenge:
+        # Ask user to confirm or reconsider
+        await wa.send_interactive_buttons(
+            sender,
+            challenge,
+            [
+                {"id": f"confirm_{field}", "title": "Yes, Confirm ✓"},
+                {"id": f"revise_{field}",  "title": "Let Me Revise"},
+            ],
+        )
+        return "awaiting_confirmation"
+
+    # Normal flow: show selections + Add More / Done
     await wa.send_interactive_buttons(
         sender,
         f"*{step_label}* so far:\n{_fmt_selections(selections)}\n\nAdd another or continue?",
@@ -226,7 +348,7 @@ async def _send_visual_style_picker(sender: str, step="Step 6 of 6"):
     )
 
 
-# ── Generic multi-select handler ─────────────────────────────────────────────
+# ── Generic multi-select handler with ReAct validation ──────────────────────
 
 async def _handle_multiselect(
     sender: str,
@@ -243,8 +365,26 @@ async def _handle_multiselect(
     """
     Returns True when done (proceed to next step), False to stay in this step.
     Mutates data[field] in-place.
+    Integrates ReAct validation to challenge inconsistent selections.
     """
     selections: list[str] = data.setdefault(field, [])
+
+    # ── Handle ReAct confirmation responses ───────────────────────────────
+    if text == f"confirm_{field}":
+        # User confirmed the selection despite challenge
+        data.pop("awaiting_confirmation", None)
+        await _confirm_selection(
+            sender, step_label, selections, add_more_id, done_id,
+            field=field, context=data
+        )
+        return False
+
+    if text == f"revise_{field}":
+        # User wants to revise; clear and re-show picker
+        selections.clear()
+        data.pop("awaiting_confirmation", None)
+        await send_picker(sender)
+        return False
 
     # ── "Done" button ────────────────────────────────────────────────────
     if text == done_id:
@@ -269,7 +409,13 @@ async def _handle_multiselect(
             if p not in selections:
                 selections.append(p)
         data.pop("awaiting_custom", None)
-        await _confirm_selection(sender, step_label, selections, add_more_id, done_id)
+        confirmation = await _confirm_selection(
+            sender, step_label, selections, add_more_id, done_id,
+            field=field, context=data
+        )
+        # If ReAct validation triggered, don't proceed
+        if confirmation == "awaiting_confirmation":
+            data["awaiting_confirmation"] = field
         return False
 
     # ── "Other" selected ─────────────────────────────────────────────────
@@ -291,7 +437,14 @@ async def _handle_multiselect(
     if label not in selections:
         selections.append(label)
 
-    await _confirm_selection(sender, step_label, selections, add_more_id, done_id)
+    confirmation = await _confirm_selection(
+        sender, step_label, selections, add_more_id, done_id,
+        field=field, context=data
+    )
+    # If ReAct validation triggered, don't proceed
+    if confirmation == "awaiting_confirmation":
+        data["awaiting_confirmation"] = field
+
     return False
 
 
