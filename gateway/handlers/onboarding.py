@@ -290,6 +290,7 @@ async def _send_goals_picker(sender: str, step="Step 3 of 6"):
                 {"id": "product_sales",   "title": "Promote Products / Sales","description": "Launch products, run promotions"},
                 {"id": "educate",         "title": "Educate My Audience",     "description": "Share tips, news, how-tos"},
                 {"id": "community",       "title": "Build Community",         "description": "Loyal fans, tribe, repeat buyers"},
+                {"id": "other_goal",      "title": "➕ Other (type below)",  "description": "Type one or more, separated by commas"},
             ],
         }],
     )
@@ -306,6 +307,7 @@ async def _send_tone_picker(sender: str, step="Step 4 of 6"):
                 {"id": "professional",   "title": "Professional",      "description": "Polished, authoritative, business-like"},
                 {"id": "casual",         "title": "Casual & Friendly", "description": "Warm, conversational, approachable"},
                 {"id": "thought_leader", "title": "Thought Leader",    "description": "Insightful, bold, industry authority"},
+                {"id": "other_tone",     "title": "➕ Other (type below)", "description": "Type one or more, separated by commas"},
             ],
         }],
     )
@@ -319,12 +321,13 @@ async def _send_content_style_picker(sender: str, step="Step 5 of 6"):
         [{
             "title": "Content Styles",
             "rows": [
-                {"id": "humorous",          "title": "Humorous / Memes",    "description": "Funny, relatable, meme-worthy"},
-                {"id": "educational",       "title": "Educational / Tips",  "description": "Informative how-tos, industry tips"},
-                {"id": "inspirational",     "title": "Inspirational",       "description": "Motivational and uplifting"},
-                {"id": "behind_the_scenes", "title": "Behind the Scenes",   "description": "Authentic day-to-day business life"},
-                {"id": "product_showcase",  "title": "Product Showcase",    "description": "Highlight products and services"},
-                {"id": "mixed",             "title": "Mix of Everything",   "description": "Varied for broader appeal"},
+                {"id": "humorous",            "title": "Humorous / Memes",      "description": "Funny, relatable, meme-worthy"},
+                {"id": "educational",         "title": "Educational / Tips",    "description": "Informative how-tos, industry tips"},
+                {"id": "inspirational",       "title": "Inspirational",         "description": "Motivational and uplifting"},
+                {"id": "behind_the_scenes",   "title": "Behind the Scenes",     "description": "Authentic day-to-day business life"},
+                {"id": "product_showcase",    "title": "Product Showcase",      "description": "Highlight products and services"},
+                {"id": "mixed",               "title": "Mix of Everything",     "description": "Varied for broader appeal"},
+                {"id": "other_content_style", "title": "➕ Other (type below)", "description": "Type one or more, separated by commas"},
             ],
         }],
     )
@@ -338,11 +341,12 @@ async def _send_visual_style_picker(sender: str, step="Step 6 of 6"):
         [{
             "title": "Visual Styles",
             "rows": [
-                {"id": "cartoon",        "title": "Cartoon / Illustrated", "description": "Fun, colourful illustrations"},
-                {"id": "minimalist",     "title": "Clean & Minimalist",    "description": "Modern, white space, simple"},
-                {"id": "bold_colorful",  "title": "Bold & Colourful",      "description": "Vibrant, high-contrast graphics"},
-                {"id": "photorealistic", "title": "Photorealistic",        "description": "Realistic photos, natural lighting"},
-                {"id": "meme_style",     "title": "Meme Style",            "description": "Internet humour, relatable format"},
+                {"id": "cartoon",            "title": "Cartoon / Illustrated", "description": "Fun, colourful illustrations"},
+                {"id": "minimalist",         "title": "Clean & Minimalist",    "description": "Modern, white space, simple"},
+                {"id": "bold_colorful",      "title": "Bold & Colourful",      "description": "Vibrant, high-contrast graphics"},
+                {"id": "photorealistic",     "title": "Photorealistic",        "description": "Realistic photos, natural lighting"},
+                {"id": "meme_style",         "title": "Meme Style",            "description": "Internet humour, relatable format"},
+                {"id": "other_visual_style", "title": "➕ Other (type below)", "description": "Type one or more, separated by commas"},
             ],
         }],
     )
