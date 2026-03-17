@@ -1,10 +1,15 @@
 """
-Onboarding and help handlers.
-Flow: Welcome → Industry → Offerings → Goals → Tone → Content Style → Visual Style → Platform → Promo Code
+Onboarding flow with full multi-select UI.
 
-All steps use WhatsApp interactive UI (buttons/lists) — no free-text entry except
-for custom industry/offerings when user picks "Other".
+All steps 1–6 support:
+  - Tap-to-select from list/buttons
+  - "Add more" to pick additional options
+  - "Other" → type comma-separated custom values
+
+Flow: Welcome → Industry → Offerings → Goals → Tone → Content Style → Visual Style → Platform → Promo Code
 """
+
+from __future__ import annotations
 
 import logging
 import uuid
@@ -22,9 +27,275 @@ def _generate_referral_code() -> str:
     return "REF-" + uuid.uuid4().hex[:6].upper()
 
 
-# ===========================================================================
-# START / HELP
-# ===========================================================================
+# ── Label maps ───────────────────────────────────────────────────────────────
+
+INDUSTRY_OPTIONS = {
+    "ecommerce":     "E-commerce / Retail",
+    "fnb":           "Food & Beverage",
+    "tech":          "Technology / SaaS",
+    "health":        "Health & Fitness",
+    "realestate":    "Real Estate",
+    "beauty":        "Beauty & Wellness",
+    "education":     "Education / Coaching",
+    "marketing":     "Marketing / Agency",
+    "finance":       "Finance / Insurance",
+}
+
+OFFERING_OPTIONS = {
+    "physical_products": "Physical Products",
+    "digital_products":  "Digital Products",
+    "professional_svcs": "Professional Services",
+    "food_drinks":       "Food & Drinks",
+    "personal_training": "Personal Training",
+    "creative_svcs":     "Creative Services",
+    "online_courses":    "Online Courses",
+    "events":            "Events & Experiences",
+    "subscriptions":     "Subscriptions / SaaS",
+}
+
+GOAL_OPTIONS = {
+    "get_customers":   "Get More Customers",
+    "brand_awareness": "Build Brand Awareness",
+    "drive_traffic":   "Drive Website Traffic",
+    "grow_following":  "Grow Social Following",
+    "product_sales":   "Promote Products / Sales",
+    "educate":         "Educate My Audience",
+    "community":       "Build Community",
+}
+
+TONE_OPTIONS = {
+    "professional":   "Professional",
+    "casual":         "Casual & Friendly",
+    "thought_leader": "Thought Leader",
+}
+
+CONTENT_STYLE_OPTIONS = {
+    "humorous":           "Humorous / Memes",
+    "educational":        "Educational / Tips",
+    "inspirational":      "Inspirational",
+    "behind_the_scenes":  "Behind the Scenes",
+    "product_showcase":   "Product Showcase",
+    "mixed":              "Mix of Everything",
+}
+
+VISUAL_STYLE_OPTIONS = {
+    "cartoon":        "Cartoon / Illustrated",
+    "minimalist":     "Clean & Minimalist",
+    "bold_colorful":  "Bold & Colourful",
+    "photorealistic": "Photorealistic",
+    "meme_style":     "Meme Style",
+}
+
+
+# ── Generic multi-select confirmation helper ─────────────────────────────────
+
+def _fmt_selections(items: list[str]) -> str:
+    return "\n".join(f"  ✅ {x}" for x in items)
+
+
+async def _confirm_selection(sender: str, step_label: str, selections: list[str], add_more_id: str, done_id: str):
+    """Show current selections and offer Add More / Done buttons."""
+    await wa.send_interactive_buttons(
+        sender,
+        f"*{step_label}* so far:\n{_fmt_selections(selections)}\n\nAdd another or continue?",
+        [
+            {"id": add_more_id, "title": "Add More"},
+            {"id": done_id,     "title": "Done ✓"},
+        ],
+    )
+
+
+# ── Picker senders ───────────────────────────────────────────────────────────
+
+async def _send_industry_picker(sender: str, step="Step 1 of 6"):
+    await wa.send_interactive_list(
+        sender,
+        f"{step} — *What industry is your business in?*\n\nChoose one (you can add more after):",
+        "Select Industry",
+        [{
+            "title": "Industries",
+            "rows": [
+                {"id": "ecommerce",      "title": "E-commerce / Retail",    "description": "Online or physical product sales"},
+                {"id": "fnb",            "title": "Food & Beverage",         "description": "Restaurant, café, catering, F&B"},
+                {"id": "tech",           "title": "Technology / SaaS",       "description": "Software, apps, tech services"},
+                {"id": "health",         "title": "Health & Fitness",        "description": "Gym, nutrition, wellness, medical"},
+                {"id": "realestate",     "title": "Real Estate",             "description": "Property sales, rentals, development"},
+                {"id": "beauty",         "title": "Beauty & Wellness",       "description": "Salon, spa, skincare, aesthetics"},
+                {"id": "education",      "title": "Education / Coaching",    "description": "Tutoring, courses, training, coaching"},
+                {"id": "marketing",      "title": "Marketing / Agency",      "description": "Creative, digital, media agency"},
+                {"id": "finance",        "title": "Finance / Insurance",     "description": "Financial planning, insurance, banking"},
+                {"id": "other_industry", "title": "➕ Other (type below)",   "description": "Type one or more, separated by commas"},
+            ],
+        }],
+    )
+
+
+async def _send_offerings_picker(sender: str, step="Step 2 of 6"):
+    await wa.send_interactive_list(
+        sender,
+        f"{step} — *What does your business offer?*\n\nChoose one (you can add more after):",
+        "Select Offering",
+        [{
+            "title": "Business Offerings",
+            "rows": [
+                {"id": "physical_products",  "title": "Physical Products",     "description": "Goods, merchandise, inventory"},
+                {"id": "digital_products",   "title": "Digital Products",      "description": "Downloads, templates, software"},
+                {"id": "professional_svcs",  "title": "Professional Services", "description": "Consulting, legal, accounting"},
+                {"id": "food_drinks",        "title": "Food & Drinks",         "description": "Meals, beverages, catering"},
+                {"id": "personal_training",  "title": "Personal Training",     "description": "Fitness coaching, PT sessions"},
+                {"id": "creative_svcs",      "title": "Creative Services",     "description": "Design, photography, video"},
+                {"id": "online_courses",     "title": "Online Courses",        "description": "eLearning, workshops, webinars"},
+                {"id": "events",             "title": "Events & Experiences",  "description": "Workshops, venues, ticketed events"},
+                {"id": "subscriptions",      "title": "Subscriptions / SaaS",  "description": "Recurring plans, memberships"},
+                {"id": "other_offering",     "title": "➕ Other (type below)",  "description": "Type one or more, separated by commas"},
+            ],
+        }],
+    )
+
+
+async def _send_goals_picker(sender: str, step="Step 3 of 6"):
+    await wa.send_interactive_list(
+        sender,
+        f"{step} — *What is your main social media goal?*\n\nChoose one (you can add more after):",
+        "Select Goal",
+        [{
+            "title": "Business Goals",
+            "rows": [
+                {"id": "get_customers",   "title": "Get More Customers",      "description": "Drive leads, enquiries & sales"},
+                {"id": "brand_awareness", "title": "Build Brand Awareness",   "description": "Get known, grow visibility"},
+                {"id": "drive_traffic",   "title": "Drive Website Traffic",   "description": "Send followers to your site"},
+                {"id": "grow_following",  "title": "Grow Social Following",   "description": "Increase followers & engagement"},
+                {"id": "product_sales",   "title": "Promote Products / Sales","description": "Launch products, run promotions"},
+                {"id": "educate",         "title": "Educate My Audience",     "description": "Share tips, news, how-tos"},
+                {"id": "community",       "title": "Build Community",         "description": "Loyal fans, tribe, repeat buyers"},
+            ],
+        }],
+    )
+
+
+async def _send_tone_picker(sender: str, step="Step 4 of 6"):
+    await wa.send_interactive_list(
+        sender,
+        f"{step} — *What tone should I use for your content?*\n\nChoose one (you can add more after):",
+        "Select Tone",
+        [{
+            "title": "Tone",
+            "rows": [
+                {"id": "professional",   "title": "Professional",      "description": "Polished, authoritative, business-like"},
+                {"id": "casual",         "title": "Casual & Friendly", "description": "Warm, conversational, approachable"},
+                {"id": "thought_leader", "title": "Thought Leader",    "description": "Insightful, bold, industry authority"},
+            ],
+        }],
+    )
+
+
+async def _send_content_style_picker(sender: str, step="Step 5 of 6"):
+    await wa.send_interactive_list(
+        sender,
+        f"{step} — *What content style fits your brand?*\n\nChoose one (you can add more after):",
+        "Choose Style",
+        [{
+            "title": "Content Styles",
+            "rows": [
+                {"id": "humorous",          "title": "Humorous / Memes",    "description": "Funny, relatable, meme-worthy"},
+                {"id": "educational",       "title": "Educational / Tips",  "description": "Informative how-tos, industry tips"},
+                {"id": "inspirational",     "title": "Inspirational",       "description": "Motivational and uplifting"},
+                {"id": "behind_the_scenes", "title": "Behind the Scenes",   "description": "Authentic day-to-day business life"},
+                {"id": "product_showcase",  "title": "Product Showcase",    "description": "Highlight products and services"},
+                {"id": "mixed",             "title": "Mix of Everything",   "description": "Varied for broader appeal"},
+            ],
+        }],
+    )
+
+
+async def _send_visual_style_picker(sender: str, step="Step 6 of 6"):
+    await wa.send_interactive_list(
+        sender,
+        f"{step} — *What visual style for AI-generated images?*\n\nChoose one (you can add more after):",
+        "Choose Visual",
+        [{
+            "title": "Visual Styles",
+            "rows": [
+                {"id": "cartoon",        "title": "Cartoon / Illustrated", "description": "Fun, colourful illustrations"},
+                {"id": "minimalist",     "title": "Clean & Minimalist",    "description": "Modern, white space, simple"},
+                {"id": "bold_colorful",  "title": "Bold & Colourful",      "description": "Vibrant, high-contrast graphics"},
+                {"id": "photorealistic", "title": "Photorealistic",        "description": "Realistic photos, natural lighting"},
+                {"id": "meme_style",     "title": "Meme Style",            "description": "Internet humour, relatable format"},
+            ],
+        }],
+    )
+
+
+# ── Generic multi-select handler ─────────────────────────────────────────────
+
+async def _handle_multiselect(
+    sender: str,
+    text: str,
+    data: dict,
+    field: str,           # data key to accumulate into, e.g. "industry"
+    options: dict,        # id → label map
+    other_id: str,        # e.g. "other_industry"
+    add_more_id: str,     # e.g. "add_more_industry"
+    done_id: str,         # e.g. "done_industry"
+    step_label: str,      # display name e.g. "Industries"
+    send_picker,          # async callable to re-show the list
+) -> bool:
+    """
+    Returns True when done (proceed to next step), False to stay in this step.
+    Mutates data[field] in-place.
+    """
+    selections: list[str] = data.setdefault(field, [])
+
+    # ── "Done" button ────────────────────────────────────────────────────
+    if text == done_id:
+        if not selections:
+            await send_picker(sender)
+            return False
+        return True  # caller moves to next step
+
+    # ── "Add More" button ────────────────────────────────────────────────
+    if text == add_more_id:
+        await send_picker(sender)
+        return False
+
+    # ── Waiting for custom free-text ─────────────────────────────────────
+    if data.get("awaiting_custom") == field:
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        if not parts:
+            await wa.send_text(sender, "Please type at least one value (use commas to separate multiple).")
+            return False
+        # Avoid duplicates
+        for p in parts:
+            if p not in selections:
+                selections.append(p)
+        data.pop("awaiting_custom", None)
+        await _confirm_selection(sender, step_label, selections, add_more_id, done_id)
+        return False
+
+    # ── "Other" selected ─────────────────────────────────────────────────
+    if text == other_id:
+        data["awaiting_custom"] = field
+        await wa.send_text(
+            sender,
+            f"Type your custom {step_label.lower()} below.\n"
+            "_Separate multiple values with commas, e.g._ `Logistics, Warehousing`",
+        )
+        return False
+
+    # ── Normal list/button selection ─────────────────────────────────────
+    label = options.get(text)
+    if not label:
+        await send_picker(sender)
+        return False
+
+    if label not in selections:
+        selections.append(label)
+
+    await _confirm_selection(sender, step_label, selections, add_more_id, done_id)
+    return False
+
+
+# ── START / HELP ─────────────────────────────────────────────────────────────
 
 async def handle_start(db: BotDatabase, sender: str, text: str):
     profile = db.get_user_profile(sender)
@@ -33,9 +304,9 @@ async def handle_start(db: BotDatabase, sender: str, text: str):
             sender,
             "Welcome back! You're already set up. What would you like to do?",
             [
-                {"id": "post", "title": "Create a Post"},
+                {"id": "post",    "title": "Create a Post"},
                 {"id": "credits", "title": "Check Credits"},
-                {"id": "setup", "title": "Connect Account"},
+                {"id": "setup",   "title": "Connect Account"},
             ],
         )
         return
@@ -78,288 +349,135 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
     )
 
 
-# ===========================================================================
-# INDUSTRY PICKER
-# ===========================================================================
-
-async def _send_industry_picker(sender: str):
-    await wa.send_interactive_list(
-        sender,
-        "Step 1 of 6 — *What industry is your business in?*\n\n"
-        "Choose the closest match from the list:",
-        "Select Industry",
-        [{
-            "title": "Industries",
-            "rows": [
-                {"id": "ecommerce",     "title": "E-commerce / Retail",      "description": "Online or physical product sales"},
-                {"id": "fnb",           "title": "Food & Beverage",           "description": "Restaurant, café, catering, F&B"},
-                {"id": "tech",          "title": "Technology / SaaS",         "description": "Software, apps, tech services"},
-                {"id": "health",        "title": "Health & Fitness",          "description": "Gym, nutrition, wellness, medical"},
-                {"id": "realestate",    "title": "Real Estate",               "description": "Property sales, rentals, development"},
-                {"id": "beauty",        "title": "Beauty & Wellness",         "description": "Salon, spa, skincare, aesthetics"},
-                {"id": "education",     "title": "Education / Coaching",      "description": "Tutoring, courses, training, coaching"},
-                {"id": "marketing",     "title": "Marketing / Agency",        "description": "Creative, digital, media agency"},
-                {"id": "finance",       "title": "Finance / Insurance",       "description": "Financial planning, insurance, banking"},
-                {"id": "other_industry","title": "Other (type your own)",     "description": "Not on the list? Type it below"},
-            ],
-        }],
-    )
-
-
-# ===========================================================================
-# OFFERINGS PICKER
-# ===========================================================================
-
-async def _send_offerings_picker(sender: str):
-    await wa.send_interactive_list(
-        sender,
-        "Step 2 of 6 — *What does your business offer?*\n\n"
-        "Choose the best match:",
-        "Select Offering",
-        [{
-            "title": "Business Offerings",
-            "rows": [
-                {"id": "physical_products",  "title": "Physical Products",      "description": "Goods, merchandise, inventory"},
-                {"id": "digital_products",   "title": "Digital Products",       "description": "Downloads, templates, software"},
-                {"id": "professional_svcs",  "title": "Professional Services",  "description": "Consulting, legal, accounting"},
-                {"id": "food_drinks",        "title": "Food & Drinks",          "description": "Meals, beverages, catering"},
-                {"id": "personal_training",  "title": "Personal Training",      "description": "Fitness coaching, PT sessions"},
-                {"id": "creative_svcs",      "title": "Creative Services",      "description": "Design, photography, video"},
-                {"id": "online_courses",     "title": "Online Courses",         "description": "eLearning, workshops, webinars"},
-                {"id": "events",             "title": "Events & Experiences",   "description": "Workshops, venues, ticketed events"},
-                {"id": "subscriptions",      "title": "Subscriptions / SaaS",   "description": "Recurring plans, memberships"},
-                {"id": "other_offering",     "title": "Other (type your own)",  "description": "Not on the list? Type it below"},
-            ],
-        }],
-    )
-
-
-# ===========================================================================
-# GOALS PICKER
-# ===========================================================================
-
-async def _send_goals_picker(sender: str):
-    await wa.send_interactive_list(
-        sender,
-        "Step 3 of 6 — *What is your main social media goal?*\n\n"
-        "Choose the most important one:",
-        "Select Goal",
-        [{
-            "title": "Business Goals",
-            "rows": [
-                {"id": "get_customers",  "title": "Get More Customers",      "description": "Drive leads, enquiries & sales"},
-                {"id": "brand_awareness","title": "Build Brand Awareness",   "description": "Get known, grow visibility"},
-                {"id": "drive_traffic",  "title": "Drive Website Traffic",   "description": "Send followers to your site"},
-                {"id": "grow_following", "title": "Grow Social Following",   "description": "Increase followers & engagement"},
-                {"id": "product_sales",  "title": "Promote Products / Sales","description": "Launch products, run promotions"},
-                {"id": "educate",        "title": "Educate My Audience",     "description": "Share tips, news, how-tos"},
-                {"id": "community",      "title": "Build Community",         "description": "Loyal fans, tribe, repeat buyers"},
-            ],
-        }],
-    )
-
-
-# ===========================================================================
-# LABEL MAPS (id → human-readable label)
-# ===========================================================================
-
-INDUSTRY_LABELS = {
-    "ecommerce":    "E-commerce / Retail",
-    "fnb":          "Food & Beverage",
-    "tech":         "Technology / SaaS",
-    "health":       "Health & Fitness",
-    "realestate":   "Real Estate",
-    "beauty":       "Beauty & Wellness",
-    "education":    "Education / Coaching",
-    "marketing":    "Marketing / Agency",
-    "finance":      "Finance / Insurance",
-}
-
-OFFERING_LABELS = {
-    "physical_products":  "Physical Products",
-    "digital_products":   "Digital Products",
-    "professional_svcs":  "Professional Services",
-    "food_drinks":        "Food & Drinks",
-    "personal_training":  "Personal Training",
-    "creative_svcs":      "Creative Services",
-    "online_courses":     "Online Courses",
-    "events":             "Events & Experiences",
-    "subscriptions":      "Subscriptions / SaaS",
-}
-
-GOAL_LABELS = {
-    "get_customers":   "Get More Customers",
-    "brand_awareness": "Build Brand Awareness",
-    "drive_traffic":   "Drive Website Traffic",
-    "grow_following":  "Grow Social Following",
-    "product_sales":   "Promote Products / Sales",
-    "educate":         "Educate My Audience",
-    "community":       "Build Community",
-}
-
-
-# ===========================================================================
-# ONBOARDING STEPS
-# ===========================================================================
+# ── ONBOARDING STEPS ─────────────────────────────────────────────────────────
 
 async def handle_onboarding_step(
     db: BotDatabase, sender: str, text: str,
-    state: ConversationState, data: dict
+    state: ConversationState, data: dict,
 ):
     text = text.strip()
 
     # ── INDUSTRY ──────────────────────────────────────────────────────────
     if state == ConversationState.ONBOARDING_INDUSTRY:
-
-        # Waiting for custom text after picking "Other"
-        if data.get("awaiting_custom") == "industry":
-            if len(text) < 2:
-                await wa.send_text(sender, "Please type your industry (at least 2 characters).")
-                return
-            data["industry"] = [text]
-            data.pop("awaiting_custom", None)
+        done = await _handle_multiselect(
+            sender, text, data,
+            field="industry",
+            options=INDUSTRY_OPTIONS,
+            other_id="other_industry",
+            add_more_id="add_more_industry",
+            done_id="done_industry",
+            step_label="Industries",
+            send_picker=_send_industry_picker,
+        )
+        if done:
             db.set_conversation_state(sender, ConversationState.ONBOARDING_OFFERINGS, data)
             await _send_offerings_picker(sender)
-            return
-
-        if text == "other_industry":
-            data["awaiting_custom"] = "industry"
+        else:
             db.set_conversation_state(sender, ConversationState.ONBOARDING_INDUSTRY, data)
-            await wa.send_text(sender, "Type your industry below:")
-            return
-
-        label = INDUSTRY_LABELS.get(text)
-        if not label:
-            await _send_industry_picker(sender)
-            return
-
-        data["industry"] = [label]
-        db.set_conversation_state(sender, ConversationState.ONBOARDING_OFFERINGS, data)
-        await _send_offerings_picker(sender)
 
     # ── OFFERINGS ─────────────────────────────────────────────────────────
     elif state == ConversationState.ONBOARDING_OFFERINGS:
-
-        if data.get("awaiting_custom") == "offering":
-            if len(text) < 2:
-                await wa.send_text(sender, "Please type your offering (at least 2 characters).")
-                return
-            data["offerings"] = [text]
-            data.pop("awaiting_custom", None)
+        done = await _handle_multiselect(
+            sender, text, data,
+            field="offerings",
+            options=OFFERING_OPTIONS,
+            other_id="other_offering",
+            add_more_id="add_more_offering",
+            done_id="done_offering",
+            step_label="Offerings",
+            send_picker=_send_offerings_picker,
+        )
+        if done:
             db.set_conversation_state(sender, ConversationState.ONBOARDING_GOALS, data)
             await _send_goals_picker(sender)
-            return
-
-        if text == "other_offering":
-            data["awaiting_custom"] = "offering"
+        else:
             db.set_conversation_state(sender, ConversationState.ONBOARDING_OFFERINGS, data)
-            await wa.send_text(sender, "Type your product or service below:")
-            return
-
-        label = OFFERING_LABELS.get(text)
-        if not label:
-            await _send_offerings_picker(sender)
-            return
-
-        data["offerings"] = [label]
-        db.set_conversation_state(sender, ConversationState.ONBOARDING_GOALS, data)
-        await _send_goals_picker(sender)
 
     # ── GOALS ─────────────────────────────────────────────────────────────
     elif state == ConversationState.ONBOARDING_GOALS:
-
-        label = GOAL_LABELS.get(text)
-        if not label:
-            await _send_goals_picker(sender)
-            return
-
-        data["business_goals"] = [label]
-        db.set_conversation_state(sender, ConversationState.ONBOARDING_TONE, data)
-        await wa.send_interactive_buttons(
-            sender,
-            "Step 4 of 6 — *What tone should I use for your content?*",
-            [
-                {"id": "professional",  "title": "Professional"},
-                {"id": "casual",        "title": "Casual & Friendly"},
-                {"id": "thought_leader","title": "Thought Leader"},
-            ],
+        done = await _handle_multiselect(
+            sender, text, data,
+            field="business_goals",
+            options=GOAL_OPTIONS,
+            other_id="other_goal",
+            add_more_id="add_more_goal",
+            done_id="done_goal",
+            step_label="Goals",
+            send_picker=_send_goals_picker,
         )
+        if done:
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_TONE, data)
+            await _send_tone_picker(sender)
+        else:
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_GOALS, data)
 
     # ── TONE ──────────────────────────────────────────────────────────────
     elif state == ConversationState.ONBOARDING_TONE:
-        valid = {"professional": "Professional", "casual": "Casual & Friendly", "thought_leader": "Thought Leader"}
-        if text not in valid:
-            await wa.send_interactive_buttons(
-                sender,
-                "Please choose a tone:",
-                [
-                    {"id": "professional",  "title": "Professional"},
-                    {"id": "casual",        "title": "Casual & Friendly"},
-                    {"id": "thought_leader","title": "Thought Leader"},
-                ],
-            )
-            return
-        data["tone"] = [valid[text]]
-        db.set_conversation_state(sender, ConversationState.ONBOARDING_CONTENT_STYLE, data)
-        await wa.send_interactive_list(
-            sender,
-            "Step 5 of 6 — *What content style fits your brand?*\n\n"
-            "This shapes how the AI writes your posts:",
-            "Choose Style",
-            [{
-                "title": "Content Styles",
-                "rows": [
-                    {"id": "humorous",          "title": "Humorous / Memes",     "description": "Funny, relatable, meme-worthy"},
-                    {"id": "educational",       "title": "Educational / Tips",   "description": "Informative how-tos, industry tips"},
-                    {"id": "inspirational",     "title": "Inspirational",        "description": "Motivational and uplifting"},
-                    {"id": "behind_the_scenes", "title": "Behind the Scenes",    "description": "Authentic day-to-day business life"},
-                    {"id": "product_showcase",  "title": "Product Showcase",     "description": "Highlight products and services"},
-                    {"id": "mixed",             "title": "Mix of Everything",    "description": "Varied for broader appeal"},
-                ],
-            }],
+        done = await _handle_multiselect(
+            sender, text, data,
+            field="tone",
+            options=TONE_OPTIONS,
+            other_id="other_tone",
+            add_more_id="add_more_tone",
+            done_id="done_tone",
+            step_label="Tone",
+            send_picker=_send_tone_picker,
         )
+        if done:
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_CONTENT_STYLE, data)
+            await _send_content_style_picker(sender)
+        else:
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_TONE, data)
 
     # ── CONTENT STYLE ─────────────────────────────────────────────────────
     elif state == ConversationState.ONBOARDING_CONTENT_STYLE:
-        valid = ("humorous", "educational", "inspirational", "behind_the_scenes", "product_showcase", "mixed")
-        if text not in valid:
-            await wa.send_text(sender, "Please choose a style from the list above.")
-            return
-        data["content_style"] = text
-        db.set_conversation_state(sender, ConversationState.ONBOARDING_VISUAL_STYLE, data)
-        await wa.send_interactive_list(
-            sender,
-            "Step 6 of 6 — *What visual style for AI-generated images?*",
-            "Choose Visual",
-            [{
-                "title": "Visual Styles",
-                "rows": [
-                    {"id": "cartoon",        "title": "Cartoon / Illustrated", "description": "Fun, colourful illustrations"},
-                    {"id": "minimalist",     "title": "Clean & Minimalist",    "description": "Modern, white space, simple"},
-                    {"id": "bold_colorful",  "title": "Bold & Colourful",      "description": "Vibrant, high-contrast graphics"},
-                    {"id": "photorealistic", "title": "Photorealistic",        "description": "Realistic photos, natural lighting"},
-                    {"id": "meme_style",     "title": "Meme Style",            "description": "Internet humour, relatable format"},
-                ],
-            }],
+        done = await _handle_multiselect(
+            sender, text, data,
+            field="content_style",
+            options=CONTENT_STYLE_OPTIONS,
+            other_id="other_content_style",
+            add_more_id="add_more_content_style",
+            done_id="done_content_style",
+            step_label="Content Styles",
+            send_picker=_send_content_style_picker,
         )
+        if done:
+            # content_style in DB is a single VARCHAR — join multiple into comma string
+            if isinstance(data.get("content_style"), list):
+                data["content_style"] = ", ".join(data["content_style"])
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_VISUAL_STYLE, data)
+            await _send_visual_style_picker(sender)
+        else:
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_CONTENT_STYLE, data)
 
     # ── VISUAL STYLE ──────────────────────────────────────────────────────
     elif state == ConversationState.ONBOARDING_VISUAL_STYLE:
-        valid = ("cartoon", "minimalist", "bold_colorful", "photorealistic", "meme_style")
-        if text not in valid:
-            await wa.send_text(sender, "Please choose a visual style from the list above.")
-            return
-        data["visual_style"] = text
-        db.set_conversation_state(sender, ConversationState.ONBOARDING_PLATFORM, data)
-        await wa.send_interactive_buttons(
-            sender,
-            "Almost done! 🎉\n\n*Which platform do you primarily want to post on?*",
-            [
-                {"id": "instagram", "title": "Instagram"},
-                {"id": "facebook",  "title": "Facebook"},
-                {"id": "both",      "title": "Both"},
-            ],
+        done = await _handle_multiselect(
+            sender, text, data,
+            field="visual_style",
+            options=VISUAL_STYLE_OPTIONS,
+            other_id="other_visual_style",
+            add_more_id="add_more_visual_style",
+            done_id="done_visual_style",
+            step_label="Visual Styles",
+            send_picker=_send_visual_style_picker,
         )
+        if done:
+            # visual_style in DB is single VARCHAR — join if multiple
+            if isinstance(data.get("visual_style"), list):
+                data["visual_style"] = ", ".join(data["visual_style"])
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_PLATFORM, data)
+            await wa.send_interactive_buttons(
+                sender,
+                "Almost done! 🎉\n\n*Which platform do you primarily want to post on?*",
+                [
+                    {"id": "instagram", "title": "Instagram"},
+                    {"id": "facebook",  "title": "Facebook"},
+                    {"id": "both",      "title": "Both"},
+                ],
+            )
+        else:
+            db.set_conversation_state(sender, ConversationState.ONBOARDING_VISUAL_STYLE, data)
 
     # ── PLATFORM ──────────────────────────────────────────────────────────
     elif state == ConversationState.ONBOARDING_PLATFORM:
@@ -395,37 +513,27 @@ async def handle_onboarding_step(
         await wa.send_text(sender, "Something went wrong. Send *start* to begin again.")
 
 
-# ===========================================================================
-# PROMO / REFERRAL CODE
-# ===========================================================================
+# ── PROMO / REFERRAL CODE ────────────────────────────────────────────────────
 
 async def handle_promo_step(
     db: BotDatabase, sender: str, text: str,
-    state: ConversationState, data: dict
+    state: ConversationState, data: dict,
 ):
     text = text.strip()
 
-    # "Enter Code" button → ask them to type the code
     if text == "enter_promo":
         data["awaiting_promo_text"] = True
         db.set_conversation_state(sender, ConversationState.AWAITING_PROMO_CODE, data)
         await wa.send_text(sender, "Type your promo or referral code below:")
         return
 
-    # Skip button or skip text
     if text in ("skip", "no", "none", ""):
         db.clear_conversation_state(sender)
         await _send_onboarding_complete(db, sender)
         return
 
-    # If they clicked Enter Code but haven't typed yet, wait
-    if not data.get("awaiting_promo_text") and text not in ("enter_promo", "skip"):
-        # Might be typing directly — handle it
-        pass
-
     code = text.upper()
 
-    # Referral code
     if code.startswith("REF-"):
         referrer = db.find_user_by_referral_code(code)
         if not referrer:
@@ -449,7 +557,6 @@ async def handle_promo_step(
         await _send_onboarding_complete(db, sender)
         return
 
-    # Promo code
     promo = db.validate_promo_code(code)
     if not promo:
         await wa.send_text(sender, "That code isn't valid or has expired. Try again or type *skip*.")
@@ -468,9 +575,7 @@ async def handle_promo_step(
     await _send_onboarding_complete(db, sender)
 
 
-# ===========================================================================
-# ONBOARDING COMPLETE
-# ===========================================================================
+# ── ONBOARDING COMPLETE ──────────────────────────────────────────────────────
 
 async def _send_onboarding_complete(db: BotDatabase, sender: str):
     user = db.get_user(sender)
