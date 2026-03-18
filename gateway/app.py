@@ -21,6 +21,7 @@ from shared.config import (
     STRIPE_WEBHOOK_SECRET,
     MONTHLY_CREDITS,
     PAYMENT_SERVER_URL,
+    WHATSAPP_BOT_PHONE,
 )
 from shared.database import BotDatabase
 from shared.credits import CreditManager
@@ -190,48 +191,60 @@ async def serve_media(filename: str):
 # PAYMENT REDIRECT PAGES (Stripe Checkout redirects here)
 # =========================================================================
 
-_SUCCESS_HTML = """<!DOCTYPE html>
+def _wa_btn(label: str = "Return to WhatsApp") -> str:
+    href = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
+    return (
+        f'<a href="{href}" style="display:inline-block;margin-top:24px;padding:14px 28px;'
+        f'background:#25D366;color:#fff;text-decoration:none;border-radius:8px;'
+        f'font-size:16px;font-weight:600;">&#x21A9; {label}</a>'
+    )
+
+
+_SUCCESS_HTML = f"""<!DOCTYPE html>
 <html><head><title>Payment Successful</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#f0fdf4;color:#166534;padding:20px;text-align:center}
-.card{padding:40px;max-width:400px}
-h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#f0fdf4;color:#166534;padding:20px;text-align:center}}
+.card{{padding:40px;max-width:400px}}
+h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
 </style></head>
 <body><div class="card">
 <h1>&#10003;</h1>
 <p><strong>Payment successful!</strong></p>
-<p>Your subscription is being activated. Return to WhatsApp — you'll receive a confirmation message shortly.</p>
+<p>Your subscription is being activated. You'll receive a confirmation message in WhatsApp shortly.</p>
+{_wa_btn("Back to WhatsApp")}
 </div></body></html>"""
 
-_CANCEL_HTML = """<!DOCTYPE html>
+_CANCEL_HTML = f"""<!DOCTYPE html>
 <html><head><title>Payment Cancelled</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}
-.card{padding:40px;max-width:400px}
-h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}}
+.card{{padding:40px;max-width:400px}}
+h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
 </style></head>
 <body><div class="card">
 <h1>&#8592;</h1>
 <p>Payment cancelled. No charges were made.</p>
-<p>Return to WhatsApp and send <strong>subscribe</strong> to try again.</p>
+<p>Send <strong>subscribe</strong> in WhatsApp to try again.</p>
+{_wa_btn("Back to WhatsApp")}
 </div></body></html>"""
 
-_PORTAL_RETURN_HTML = """<!DOCTYPE html>
+_PORTAL_RETURN_HTML = f"""<!DOCTYPE html>
 <html><head><title>Subscription Updated</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#eff6ff;color:#1e40af;padding:20px;text-align:center}
-.card{padding:40px;max-width:400px}
-h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#eff6ff;color:#1e40af;padding:20px;text-align:center}}
+.card{{padding:40px;max-width:400px}}
+h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
 </style></head>
 <body><div class="card">
 <h1>&#10003;</h1>
-<p>Subscription updated. Return to WhatsApp to continue.</p>
+<p>Subscription updated.</p>
+{_wa_btn("Back to WhatsApp")}
 </div></body></html>"""
 
 

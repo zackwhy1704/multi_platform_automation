@@ -89,6 +89,8 @@ FB_APP_SECRET = os.getenv("FB_APP_SECRET", "")
 # --- OAuth ---
 OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
+# Bot's WhatsApp number (international format, no +) — used for "Return to WhatsApp" links
+WHATSAPP_BOT_PHONE = os.getenv("WHATSAPP_BOT_PHONE", "")
 
 # --- Pexels (stock images — free fallback) ---
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")

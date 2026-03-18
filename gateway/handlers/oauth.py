@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from shared.config import FB_APP_ID, FB_APP_SECRET, OAUTH_REDIRECT_URI, PUBLIC_BASE_URL
+from shared.config import FB_APP_ID, FB_APP_SECRET, OAUTH_REDIRECT_URI, PUBLIC_BASE_URL, WHATSAPP_BOT_PHONE
 from shared.database import BotDatabase
 from gateway import whatsapp_client as wa
 
@@ -42,6 +42,7 @@ OAUTH_SCOPES = ",".join([
     "instagram_basic",
     "instagram_content_publish",
     "pages_show_list",
+    "public_profile",
 ])
 
 # CSRF state signing — prevents forged callbacks
@@ -299,64 +300,78 @@ async def handle_oauth_callback(code: str, state: str, db: BotDatabase) -> dict:
         return {"error": str(e)}
 
 
+def _wa_return_btn(label: str = "Return to WhatsApp") -> str:
+    """Generate a WhatsApp deep link button. Opens bot chat if phone configured."""
+    href = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
+    return (
+        f'<a href="{href}" style="display:inline-block;margin-top:24px;padding:14px 28px;'
+        f'background:#25D366;color:#fff;text-decoration:none;border-radius:8px;'
+        f'font-size:16px;font-weight:600;">&#x21A9; {label}</a>'
+    )
+
+
 # HTML for the OAuth result page (shown in browser after callback)
-OAUTH_SUCCESS_HTML = """<!DOCTYPE html>
+OAUTH_SUCCESS_HTML = f"""<!DOCTYPE html>
 <html><head><title>Connected!</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#f0fdf4;color:#166534;padding:20px;text-align:center}
-.card{padding:40px;max-width:400px}
-h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#f0fdf4;color:#166534;padding:20px;text-align:center}}
+.card{{padding:40px;max-width:400px}}
+h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
 </style></head>
 <body><div class="card">
 <h1>&#10003;</h1>
 <p><strong>Account connected!</strong></p>
-<p>Return to WhatsApp — you'll see a confirmation message.</p>
+<p>You'll see a confirmation message in WhatsApp.</p>
+{_wa_return_btn("Back to WhatsApp")}
 </div></body></html>"""
 
-OAUTH_ERROR_HTML = """<!DOCTYPE html>
+OAUTH_ERROR_HTML = f"""<!DOCTYPE html>
 <html><head><title>Connection Failed</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#fef2f2;color:#991b1b;padding:20px;text-align:center}
-.card{padding:40px;max-width:400px}
-h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#fef2f2;color:#991b1b;padding:20px;text-align:center}}
+.card{{padding:40px;max-width:400px}}
+h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
 </style></head>
 <body><div class="card">
 <h1>&#10007;</h1>
 <p><strong>Connection failed</strong></p>
 <p>Return to WhatsApp and send <strong>setup</strong> to try again.</p>
+{_wa_return_btn("Back to WhatsApp")}
 </div></body></html>"""
 
-OAUTH_DENIED_HTML = """<!DOCTYPE html>
+OAUTH_DENIED_HTML = f"""<!DOCTYPE html>
 <html><head><title>Permission Denied</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}
-.card{padding:40px;max-width:400px}
-h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}}
+.card{{padding:40px;max-width:400px}}
+h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
 </style></head>
 <body><div class="card">
 <h1>&#8592;</h1>
 <p><strong>Permission not granted</strong></p>
-<p>You need to grant all requested permissions for the bot to work.</p>
-<p>Return to WhatsApp and send <strong>setup</strong> to try again.</p>
+<p>The bot needs all requested permissions to post on your behalf.</p>
+<p>Send <strong>setup</strong> in WhatsApp and grant all permissions.</p>
+{_wa_return_btn("Back to WhatsApp")}
 </div></body></html>"""
 
-OAUTH_EXPIRED_HTML = """<!DOCTYPE html>
+OAUTH_EXPIRED_HTML = f"""<!DOCTYPE html>
 <html><head><title>Link Expired</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}
-.card{padding:40px;max-width:400px}
-h1{font-size:48px;margin:0}p{font-size:18px;line-height:1.6}
+body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
+min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}}
+.card{{padding:40px;max-width:400px}}
+h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
 </style></head>
 <body><div class="card">
 <h1>&#8635;</h1>
 <p><strong>This link has expired</strong></p>
-<p>Return to WhatsApp and send <strong>setup</strong> to get a new link.</p>
+<p>Send <strong>setup</strong> in WhatsApp to get a fresh link.</p>
+{_wa_return_btn("Back to WhatsApp")}
 </div></body></html>"""
