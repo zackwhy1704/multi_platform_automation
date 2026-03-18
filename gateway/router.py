@@ -42,6 +42,7 @@ STATE_HANDLERS = {
     ConversationState.AWAITING_PROMO_CODE: onboarding.handle_promo_step,
     # Platform setup
     ConversationState.SETUP_PLATFORM: settings.handle_setup_step,
+    ConversationState.SETUP_MANUAL_CHOOSE: settings.handle_setup_step,
     ConversationState.SETUP_FB_TOKEN: settings.handle_setup_step,
     ConversationState.SETUP_IG_TOKEN: settings.handle_setup_step,
     # Actions — posting flow

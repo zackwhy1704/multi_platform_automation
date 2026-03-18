@@ -1,12 +1,18 @@
 """
 Settings, platform setup, and disconnect handlers.
-Uses Facebook OAuth for one-click connection. Falls back to manual token if OAuth not configured.
-Supports disconnect (logout) to switch FB/IG accounts.
+
+Primary flow: Facebook OAuth (one-click, connects FB + IG together).
+Fallback flow: Manual token entry (works for any user, no App Review required).
+
+Manual flow uses Facebook's Graph API Explorer — user gets a User Access Token,
+pastes it here, and we extract the Page token + IG account server-side.
 """
 
 import logging
+import httpx
+
 from shared.database import BotDatabase
-from shared.config import FB_APP_ID, PUBLIC_BASE_URL
+from shared.config import FB_APP_ID, FB_APP_SECRET, PUBLIC_BASE_URL
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
 from gateway.handlers.oauth import get_oauth_url
@@ -14,6 +20,7 @@ from gateway.handlers.oauth import get_oauth_url
 logger = logging.getLogger(__name__)
 
 PLATFORM_LABELS = {"facebook": "Facebook", "instagram": "Instagram"}
+GRAPH_API = "https://graph.facebook.com/v21.0"
 
 
 def _account_label(token_data: dict, platform: str) -> str:
@@ -72,7 +79,7 @@ async def handle_settings(db: BotDatabase, sender: str, text: str):
 
 
 async def handle_setup(db: BotDatabase, sender: str, text: str):
-    """Start platform connection — use OAuth if available, else manual."""
+    """Start platform connection — OAuth is primary, manual token is parallel fallback."""
     oauth_url = get_oauth_url(sender)
 
     if oauth_url:
@@ -88,26 +95,194 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
                 f"*Currently connected:*\n"
                 f"  Facebook: *{fb_label}*\n"
                 f"  Instagram: *{ig_label}*\n\n"
-                f"Click below to *switch to a different account*.\n"
-                f"The new account will replace the current one.\n\n"
+                f"Connect below to *switch to a different account*.\n\n"
             )
 
         await wa.send_text(
             sender,
             f"{status}"
             f"*Connect your Facebook & Instagram*\n\n"
-            f"Click the link below to log in with Facebook. "
-            f"This connects your Page and Instagram (if linked) in one step.\n\n"
-            f"{oauth_url}",
+            f"*Option 1 — One-click (recommended):*\n"
+            f"Tap the link below to connect via Facebook Login:\n\n"
+            f"{oauth_url}\n\n"
+            f"_If Facebook shows an error, use Option 2 instead._",
         )
-    else:
-        # Fallback: manual token entry
         await wa.send_interactive_buttons(
             sender,
-            "Which platform do you want to connect?",
-            [{"id": "facebook", "title": "Facebook"}, {"id": "instagram", "title": "Instagram"}],
+            "Facebook Login not working? Connect manually instead:",
+            [{"id": "connect_manually", "title": "Connect Manually"}],
         )
-        db.set_conversation_state(sender, ConversationState.SETUP_PLATFORM, {})
+        # Keep state so "Connect Manually" button is handled
+        db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {})
+
+    else:
+        # OAuth not configured — go straight to manual
+        await _send_manual_token_guide(sender)
+        db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
+
+
+async def _send_manual_token_guide(sender: str):
+    """Send step-by-step instructions for getting a Facebook token manually."""
+    guide_url = f"{PUBLIC_BASE_URL}/guide/connect-facebook" if PUBLIC_BASE_URL else None
+
+    if guide_url:
+        await wa.send_text(
+            sender,
+            "*Option 2 — Manual Connection*\n\n"
+            "Follow this step-by-step guide to get your Facebook token:\n\n"
+            f"📖 *Guide:* {guide_url}\n\n"
+            "Once you have your token, *paste it here* and we'll connect your account.\n\n"
+            "_Type *cancel* to go back._",
+        )
+    else:
+        await wa.send_text(
+            sender,
+            "*Manual Connection — Step by Step*\n\n"
+            "1️⃣ Open: *developers.facebook.com/tools/explorer*\n\n"
+            "2️⃣ Top-right dropdown → select your *Facebook App*\n\n"
+            "3️⃣ Click *'Generate Access Token'* (blue button)\n\n"
+            "4️⃣ Click *'Continue as [Your Name]'* → then *'OK'*\n\n"
+            "5️⃣ Copy the long token from the *Access Token* field\n"
+            "   (starts with *EAA...* or *EAAl...*)\n\n"
+            "6️⃣ Paste the token here ↓\n\n"
+            "_Type *cancel* to go back._",
+        )
+
+
+async def _validate_and_store_manual_token(sender: str, token: str, db: BotDatabase):
+    """
+    Validate a manually-pasted Facebook token, extract page info, exchange for
+    long-lived token, detect linked Instagram, and store everything.
+    """
+    await wa.send_text(sender, "🔄 Validating your token, please wait...")
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+
+            # Step 1: Validate token is real
+            me_resp = await client.get(
+                f"{GRAPH_API}/me",
+                params={"access_token": token, "fields": "id,name"},
+            )
+            if me_resp.status_code != 200:
+                await wa.send_text(
+                    sender,
+                    "❌ *Invalid token.*\n\n"
+                    "Make sure you copied the *full* token from Graph API Explorer "
+                    "(it's a very long string starting with EAA...).\n\n"
+                    "Paste the token again, or type *cancel* to exit.",
+                )
+                return
+
+            me_data = me_resp.json()
+
+            # Step 2: Exchange for long-lived token (60 days) if app credentials available
+            long_token = token
+            if FB_APP_ID and FB_APP_SECRET:
+                ll_resp = await client.get(
+                    f"{GRAPH_API}/oauth/access_token",
+                    params={
+                        "grant_type": "fb_exchange_token",
+                        "client_id": FB_APP_ID,
+                        "client_secret": FB_APP_SECRET,
+                        "fb_exchange_token": token,
+                    },
+                )
+                if ll_resp.status_code == 200:
+                    long_token = ll_resp.json().get("access_token", token)
+
+            # Step 3: Get pages (works for user tokens; page tokens return empty)
+            pages_resp = await client.get(
+                f"{GRAPH_API}/me/accounts",
+                params={
+                    "access_token": long_token,
+                    "fields": "id,name,access_token,instagram_business_account",
+                },
+            )
+
+            pages = []
+            if pages_resp.status_code == 200:
+                pages = pages_resp.json().get("data", [])
+
+            if pages:
+                # User token — extract the first page's permanent page token
+                page = pages[0]
+                page_token = page.get("access_token", long_token)
+                page_id = page.get("id", "")
+                page_name = page.get("name", me_data.get("name", "Your Page"))
+                ig_account = page.get("instagram_business_account", {}).get("id")
+            else:
+                # Already a page token — use as-is
+                page_token = long_token
+                page_id = me_data.get("id", "")
+                page_name = me_data.get("name", "Your Page")
+                ig_account = None
+
+                # Try to find IG linked to this page
+                ig_check = await client.get(
+                    f"{GRAPH_API}/{page_id}",
+                    params={"access_token": page_token,
+                            "fields": "instagram_business_account"},
+                )
+                if ig_check.status_code == 200:
+                    ig_account = ig_check.json().get(
+                        "instagram_business_account", {}
+                    ).get("id")
+
+            # Step 4: Store Facebook
+            db.save_platform_token(
+                sender, "facebook", page_token, page_id,
+                page_name=page_name, account_username=page_name,
+            )
+
+            # Step 5: Store Instagram if linked
+            ig_connected = False
+            ig_username = ""
+            if ig_account:
+                try:
+                    ig_resp = await client.get(
+                        f"{GRAPH_API}/{ig_account}",
+                        params={"fields": "username,name", "access_token": page_token},
+                    )
+                    if ig_resp.status_code == 200:
+                        ig_username = ig_resp.json().get("username", "")
+                except Exception as e:
+                    logger.warning("Failed to fetch IG username for %s: %s", sender, e)
+
+                db.save_platform_token(
+                    sender, "instagram", page_token, ig_account,
+                    page_name=page_name, account_username=ig_username or page_name,
+                )
+                ig_connected = True
+
+            # Step 6: Confirm to user
+            msg = f"✅ *Facebook connected!*\n\nPage: *{page_name}*\n"
+            if ig_connected:
+                ig_label = f"@{ig_username}" if ig_username else "Linked"
+                msg += f"Instagram: *{ig_label}* (linked to your Page)\n"
+            else:
+                msg += "Instagram: Not linked to this Page\n"
+
+            if pages and len(pages) > 1:
+                other = ", ".join(p["name"] for p in pages[1:3])
+                msg += f"\n_Other pages found: {other}_\n_(Currently using: {page_name})_"
+
+            msg += "\n\nSend *post* to create your first post!"
+
+            db.clear_conversation_state(sender)
+            await wa.send_text(sender, msg)
+
+    except httpx.TimeoutException:
+        await wa.send_text(
+            sender,
+            "⏱️ Request timed out. Please paste the token again, or type *cancel* to exit.",
+        )
+    except Exception as e:
+        logger.error("Manual token validation error for %s: %s", sender, e, exc_info=True)
+        await wa.send_text(
+            sender,
+            "❌ Something went wrong. Please paste the token again, or type *cancel*.",
+        )
 
 
 async def handle_disconnect(db: BotDatabase, sender: str, text: str):
@@ -127,7 +302,6 @@ async def handle_disconnect(db: BotDatabase, sender: str, text: str):
     if fb_token and ig_token:
         buttons.append({"id": "disconnect_all", "title": "Disconnect All"})
 
-    # Build status message
     lines = ["*Connected Accounts:*\n"]
     if fb_token:
         lines.append(f"  Facebook: *{_account_label(fb_token, 'facebook')}*")
@@ -139,8 +313,11 @@ async def handle_disconnect(db: BotDatabase, sender: str, text: str):
     db.set_conversation_state(sender, ConversationState.SETUP_PLATFORM, {"action": "disconnect"})
 
 
-async def handle_setup_step(db: BotDatabase, sender: str, text: str, state: ConversationState, data: dict):
-    """Handle manual token setup and disconnect actions."""
+async def handle_setup_step(
+    db: BotDatabase, sender: str, text: str,
+    state: ConversationState, data: dict,
+):
+    """Handle manual token setup, manual-choose state, and disconnect actions."""
 
     # --- DISCONNECT FLOW ---
     if data.get("action") == "disconnect":
@@ -175,7 +352,21 @@ async def handle_setup_step(db: BotDatabase, sender: str, text: str, state: Conv
             await wa.send_text(sender, "Please choose an account to disconnect.")
         return
 
-    # --- MANUAL TOKEN SETUP (fallback when OAuth not configured) ---
+    # --- MANUAL CHOOSE STATE (shown OAuth + waiting for "Connect Manually" button) ---
+    if state == ConversationState.SETUP_MANUAL_CHOOSE:
+        if text == "connect_manually":
+            await _send_manual_token_guide(sender)
+            db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
+        else:
+            # Re-show the options (e.g. user typed something random)
+            await wa.send_interactive_buttons(
+                sender,
+                "Tap below to connect manually, or tap the OAuth link sent earlier:",
+                [{"id": "connect_manually", "title": "Connect Manually"}],
+            )
+        return
+
+    # --- PLATFORM CHOICE (legacy manual-only path when OAuth not configured) ---
     if state == ConversationState.SETUP_PLATFORM:
         platform = text.lower()
         if platform not in PLATFORM_LABELS:
@@ -185,31 +376,37 @@ async def handle_setup_step(db: BotDatabase, sender: str, text: str, state: Conv
         data["platform"] = platform
         if platform == "facebook":
             db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, data)
-            await wa.send_text(
-                sender,
-                "To connect Facebook, I need your *Page Access Token*.\n\n"
-                "You can get this from Facebook Developer Console:\n"
-                "1. Go to developers.facebook.com\n"
-                "2. Select your app > Tools > Graph API Explorer\n"
-                "3. Select your Page and generate a token\n\n"
-                "Paste your token below:",
-            )
+            await _send_manual_token_guide(sender)
         elif platform == "instagram":
             db.set_conversation_state(sender, ConversationState.SETUP_IG_TOKEN, data)
             await wa.send_text(
                 sender,
-                "To connect Instagram, I need your *Instagram Business Account* token.\n\n"
-                "This requires a Facebook Page linked to your IG Business account.\n"
-                "Get a Page Access Token from developers.facebook.com.\n\n"
-                "Paste your token below:",
+                "Instagram uses the same token as your Facebook Page.\n\n"
+                "Follow the same guide to get your Facebook Page token — "
+                "we'll automatically link your Instagram account.\n\n"
+                "*Paste your Facebook Page token below:*",
             )
 
+    # --- MANUAL FACEBOOK TOKEN ENTRY ---
     elif state == ConversationState.SETUP_FB_TOKEN:
-        db.save_platform_token(sender, "facebook", text.strip())
-        db.clear_conversation_state(sender)
-        await wa.send_text(sender, "*Facebook* connected! You can now use *post* or *reply* for Facebook.")
+        token = text.strip()
+        if len(token) < 20:
+            await wa.send_text(
+                sender,
+                "That doesn't look like a valid token.\n\n"
+                "The token is a very long string (100+ characters) starting with *EAA...*\n"
+                "Please paste the full token, or type *cancel* to exit.",
+            )
+            return
+        await _validate_and_store_manual_token(sender, token, db)
 
+    # --- MANUAL INSTAGRAM TOKEN ENTRY (same as FB — page token covers both) ---
     elif state == ConversationState.SETUP_IG_TOKEN:
-        db.save_platform_token(sender, "instagram", text.strip())
-        db.clear_conversation_state(sender)
-        await wa.send_text(sender, "*Instagram* connected! You can now use *post* or *reply* for Instagram.")
+        token = text.strip()
+        if len(token) < 20:
+            await wa.send_text(
+                sender,
+                "That doesn't look like a valid token. Please paste the full token.",
+            )
+            return
+        await _validate_and_store_manual_token(sender, token, db)

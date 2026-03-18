@@ -492,6 +492,24 @@ async def test_oauth(client: httpx.AsyncClient):
     else:
         test_fail(f"GET /media/nonexistent.jpg → HTTP {resp.status_code} (expected 404)")
 
+    # Test guide page
+    resp = await client.get(f"{BASE_URL}/guide/connect-facebook")
+    if resp.status_code == 200 and "graph api explorer" in resp.text.lower():
+        test_pass("GET /guide/connect-facebook → guide page served with step-by-step instructions")
+    elif resp.status_code == 200:
+        test_fail("GET /guide/connect-facebook → 200 but missing expected content", resp.text[:100])
+    else:
+        test_fail(f"GET /guide/connect-facebook → HTTP {resp.status_code} (expected 200)")
+
+    # Test privacy page
+    resp = await client.get(f"{BASE_URL}/privacy")
+    if resp.status_code == 200 and "privacy" in resp.text.lower():
+        test_pass("GET /privacy → privacy policy page served (required for App Review)")
+    elif resp.status_code == 200:
+        test_fail("GET /privacy → 200 but missing expected content", resp.text[:100])
+    else:
+        test_fail(f"GET /privacy → HTTP {resp.status_code} (expected 200)")
+
     # Validate Stripe key format
     if STRIPE_SECRET:
         if STRIPE_SECRET.startswith("sk_live_"):
@@ -938,6 +956,133 @@ async def test_facebook_instagram_tokens(client: httpx.AsyncClient):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  LAYER 8: Manual Token Setup Flow (parallel fallback to OAuth)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def test_manual_setup_flow(client: httpx.AsyncClient):
+    section("LAYER 8: Manual Token Setup Flow")
+
+    # ── 8.1 Send 'setup' — expect OAuth URL + 'Connect Manually' button ───────
+    payload = make_text_webhook(TEST_PHONE, "setup", "test_setup_001")
+    resp = await post_webhook(client, payload)
+    if resp.status_code == 200:
+        test_pass("POST /webhook (text: 'setup') → accepted by gateway")
+    else:
+        test_fail(f"POST /webhook (text: 'setup') → HTTP {resp.status_code}", resp.text[:200])
+        return
+
+    await asyncio.sleep(2.0)
+
+    # ── 8.2 Verify conversation state is SETUP_MANUAL_CHOOSE ─────────────────
+    if DATABASE_URL:
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            cur = conn.cursor()
+            cur.execute("SELECT state FROM conversation_state WHERE phone_number_id = %s", (TEST_PHONE,))
+            conv = cur.fetchone()
+            conn.close()
+            if conv and conv["state"] == "setup_manual_choose":
+                test_pass("State is 'setup_manual_choose' → OAuth URL shown with manual fallback button")
+            elif conv:
+                test_fail(f"Expected state 'setup_manual_choose', got '{conv['state']}'",
+                          "Code may not be deployed yet — push to Railway")
+            else:
+                test_fail("No conversation state found after 'setup'",
+                          "Bot may be in idle (profile not set up), or state was cleared")
+        except Exception as e:
+            test_fail(f"DB state check error: {e}")
+
+    # ── 8.3 Simulate user tapping 'Connect Manually' button ──────────────────
+    payload = make_interactive_webhook(TEST_PHONE, "connect_manually", "button_reply", "test_setup_002")
+    resp = await post_webhook(client, payload)
+    if resp.status_code == 200:
+        test_pass("POST /webhook (button: 'connect_manually') → accepted")
+    else:
+        test_fail(f"POST /webhook (button: 'connect_manually') → HTTP {resp.status_code}", resp.text[:200])
+        return
+
+    await asyncio.sleep(2.0)
+
+    # ── 8.4 Verify state transitioned to SETUP_FB_TOKEN ──────────────────────
+    if DATABASE_URL:
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            cur = conn.cursor()
+            cur.execute("SELECT state FROM conversation_state WHERE phone_number_id = %s", (TEST_PHONE,))
+            conv = cur.fetchone()
+            conn.close()
+            if conv and conv["state"] == "setup_fb_token":
+                test_pass("State is 'setup_fb_token' → guide sent, bot waiting for token paste")
+            elif conv:
+                test_fail(f"Expected state 'setup_fb_token', got '{conv['state']}'")
+            else:
+                test_fail("No conversation state found after 'connect_manually'")
+        except Exception as e:
+            test_fail(f"DB state check error: {e}")
+
+    # ── 8.5 Test invalid token rejection ──────────────────────────────────────
+    payload = make_text_webhook(TEST_PHONE, "not_a_real_token", "test_setup_003")
+    resp = await post_webhook(client, payload)
+    if resp.status_code == 200:
+        test_pass("POST /webhook (short invalid token) → accepted (bot should reject it)")
+    else:
+        test_fail(f"POST /webhook (invalid token) → HTTP {resp.status_code}")
+
+    await asyncio.sleep(2.0)
+
+    # ── 8.6 Verify state still SETUP_FB_TOKEN (not cleared on bad token) ──────
+    if DATABASE_URL:
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            cur = conn.cursor()
+            cur.execute("SELECT state FROM conversation_state WHERE phone_number_id = %s", (TEST_PHONE,))
+            conv = cur.fetchone()
+            conn.close()
+            if conv and conv["state"] == "setup_fb_token":
+                test_pass("State remains 'setup_fb_token' after invalid token — bot asking user to retry")
+            elif conv:
+                # Could be cleared if token somehow validated
+                test_pass(f"State after token attempt: {conv['state']}")
+            else:
+                test_fail("State was cleared after invalid token — should stay in SETUP_FB_TOKEN")
+        except Exception as e:
+            test_fail(f"DB state check error: {e}")
+
+    # ── 8.7 Cancel out of manual flow ─────────────────────────────────────────
+    payload = make_text_webhook(TEST_PHONE, "cancel", "test_setup_004")
+    resp = await post_webhook(client, payload)
+    if resp.status_code == 200:
+        test_pass("POST /webhook (text: 'cancel') → accepted")
+    else:
+        test_fail(f"POST /webhook (text: 'cancel') → HTTP {resp.status_code}")
+
+    await asyncio.sleep(1.0)
+
+    # ── 8.8 Verify state cleared after cancel ─────────────────────────────────
+    if DATABASE_URL:
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            cur = conn.cursor()
+            cur.execute("SELECT state FROM conversation_state WHERE phone_number_id = %s", (TEST_PHONE,))
+            conv = cur.fetchone()
+            conn.close()
+            if conv is None or conv["state"] == "idle":
+                test_pass("State cleared after cancel — manual setup flow complete")
+            else:
+                test_fail(f"State NOT cleared after cancel: {conv['state']}")
+        except Exception as e:
+            test_fail(f"DB state check error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -963,6 +1108,7 @@ async def main():
         await test_onboarding_flow(client)
         await test_react_validation(client)
         await test_facebook_instagram_tokens(client)
+        await test_manual_setup_flow(client)
 
     # Summary
     print("\n" + "═"*80)

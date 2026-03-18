@@ -552,3 +552,218 @@ async def _handle_invoice_paid(invoice):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "gateway"}
+
+
+# =========================================================================
+# GUIDE PAGES — step-by-step visual guides for manual token setup
+# =========================================================================
+
+_CONNECT_FACEBOOK_GUIDE_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Connect Facebook — Step by Step</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;color:#1e293b;padding:20px}}
+.container{{max-width:640px;margin:0 auto}}
+h1{{font-size:24px;font-weight:700;color:#1877f2;margin-bottom:6px}}
+.subtitle{{color:#64748b;font-size:15px;margin-bottom:28px}}
+.step{{background:#fff;border-radius:12px;padding:20px 20px 20px 16px;margin-bottom:16px;
+       display:flex;gap:16px;box-shadow:0 1px 3px rgba(0,0,0,.08);border:1px solid #e2e8f0}}
+.step-num{{width:36px;height:36px;min-width:36px;background:#1877f2;color:#fff;
+           border-radius:50%;display:flex;align-items:center;justify-content:center;
+           font-weight:700;font-size:16px}}
+.step-body h3{{font-size:16px;font-weight:600;margin-bottom:6px;color:#0f172a}}
+.step-body p{{font-size:14px;line-height:1.6;color:#475569}}
+.step-body .url{{display:inline-block;margin-top:8px;background:#eff6ff;border:1px solid #bfdbfe;
+                  color:#1d4ed8;padding:8px 12px;border-radius:8px;font-size:13px;
+                  word-break:break-all;text-decoration:none;font-weight:500}}
+.ui-box{{background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;
+         margin-top:10px;font-size:13px;color:#334155;line-height:1.7}}
+.ui-box .arrow{{color:#1877f2;font-weight:700}}
+.badge{{display:inline-block;background:#dbeafe;color:#1e40af;padding:2px 8px;
+        border-radius:4px;font-size:12px;font-weight:600;margin-left:4px}}
+.note{{background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:12px 14px;
+       margin-top:10px;font-size:13px;color:#713f12}}
+.highlight{{background:#fffbeb;border-left:3px solid #f59e0b;padding:4px 8px;border-radius:0 4px 4px 0;font-weight:600}}
+.wa-btn{{display:block;text-align:center;margin-top:28px;padding:16px;background:#25D366;
+         color:#fff;text-decoration:none;border-radius:12px;font-size:16px;font-weight:600}}
+.done{{background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:16px;
+       text-align:center;margin-top:8px;color:#166534;font-size:15px}}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Connect Facebook &amp; Instagram</h1>
+  <p class="subtitle">Follow these steps to get your Facebook Page token. Takes about 2 minutes.</p>
+
+  <!-- Step 1 -->
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h3>Open Graph API Explorer</h3>
+      <p>Tap the link below to open Facebook's token tool. Log in with your Facebook account if prompted.</p>
+      <a class="url" href="https://developers.facebook.com/tools/explorer/" target="_blank">
+        developers.facebook.com/tools/explorer
+      </a>
+    </div>
+  </div>
+
+  <!-- Step 2 -->
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h3>Select Your Facebook App</h3>
+      <p>In the <strong>top-right corner</strong>, find the <strong>"Meta App"</strong> dropdown and select your app from the list.</p>
+      <div class="ui-box">
+        <span class="arrow">&#9654;</span> Top-right corner<br>
+        <span class="arrow">&#9654;</span> Click <strong>"Meta App"</strong> dropdown<br>
+        <span class="arrow">&#9654;</span> Select <strong>your app name</strong>
+      </div>
+      <div class="note">&#128161; Don't have an app? Create one free at developers.facebook.com/apps</div>
+    </div>
+  </div>
+
+  <!-- Step 3 -->
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h3>Generate Access Token</h3>
+      <p>Click the blue <strong>"Generate Access Token"</strong> button. A Facebook Login dialog will appear.</p>
+      <div class="ui-box">
+        <span class="arrow">&#9654;</span> Click <strong style="color:#1877f2">"Generate Access Token"</strong> button<br>
+        <span class="arrow">&#9654;</span> Click <strong>"Continue as [Your Name]"</strong><br>
+        <span class="arrow">&#9654;</span> Click <strong>"OK"</strong> or <strong>"Done"</strong>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 4 -->
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <h3>Add Required Permissions</h3>
+      <p>Before generating, make sure these permissions are selected:</p>
+      <div class="ui-box">
+        &#10003; <strong>pages_show_list</strong><br>
+        &#10003; <strong>pages_read_engagement</strong><br>
+        &#10003; <strong>pages_manage_posts</strong><br>
+        &#10003; <strong>instagram_basic</strong> (if you have Instagram)<br>
+        &#10003; <strong>instagram_content_publish</strong> (if you have Instagram)
+      </div>
+      <div class="note">&#9888;&#65039; If you don't see these permissions, click <strong>"Add a Permission"</strong> to add them.</div>
+    </div>
+  </div>
+
+  <!-- Step 5 -->
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <h3>Copy the Access Token</h3>
+      <p>After clicking OK, you'll see a long token in the <strong>Access Token</strong> field at the top of the page.</p>
+      <div class="ui-box">
+        <span class="arrow">&#9654;</span> Find the <strong>Access Token</strong> field (top of page)<br>
+        <span class="arrow">&#9654;</span> Click the token field to <strong>select all</strong><br>
+        <span class="arrow">&#9654;</span> <strong>Copy</strong> the full token<br><br>
+        <span class="highlight">Looks like: EAAl7fPZB... (100+ characters)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 6 -->
+  <div class="step">
+    <div class="step-num">6</div>
+    <div class="step-body">
+      <h3>Paste the Token in WhatsApp</h3>
+      <p>Return to your WhatsApp chat with the bot and paste the token. We'll handle the rest automatically — page detection, Instagram linking, and token renewal.</p>
+    </div>
+  </div>
+
+  <div class="done">
+    &#127881; That's it! Paste the token in WhatsApp and your Facebook &amp; Instagram will be connected.
+  </div>
+
+  <a class="wa-btn" href="https://wa.me/{WHATSAPP_BOT_PHONE or ''}">
+    &#x21A9; Back to WhatsApp
+  </a>
+</div>
+</body>
+</html>"""
+
+
+_PRIVACY_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Privacy Policy — Catalyx AI</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:720px;
+     margin:40px auto;padding:0 20px;color:#1e293b;line-height:1.7}}
+h1{{font-size:28px;font-weight:700;margin-bottom:4px}}
+.updated{{color:#64748b;font-size:14px;margin-bottom:32px}}
+h2{{font-size:18px;font-weight:600;margin:28px 0 8px}}
+p,li{{font-size:15px;color:#334155}}
+ul{{padding-left:20px}}
+a{{color:#1877f2}}
+</style>
+</head>
+<body>
+<h1>Privacy Policy</h1>
+<p class="updated">Last updated: March 2026</p>
+
+<p>Catalyx AI ("we", "our", or "us") operates a WhatsApp-based social media automation service.
+This policy explains what data we collect, how we use it, and your rights.</p>
+
+<h2>1. Data We Collect</h2>
+<ul>
+  <li><strong>WhatsApp identity:</strong> Your WhatsApp phone number and display name, used to identify your account.</li>
+  <li><strong>Business profile:</strong> Industry, goals, tone preferences, and visual style — used to generate relevant content.</li>
+  <li><strong>Facebook &amp; Instagram tokens:</strong> Page Access Tokens used to publish posts and read engagement on your behalf.</li>
+  <li><strong>Message content:</strong> Text and media you send us while creating posts.</li>
+  <li><strong>Payment info:</strong> Processed by Stripe; we store only your Stripe customer ID, not card details.</li>
+</ul>
+
+<h2>2. How We Use Your Data</h2>
+<ul>
+  <li>Publish posts to your Facebook Pages and Instagram accounts at your instruction.</li>
+  <li>Generate AI content personalised to your business profile.</li>
+  <li>Manage your subscription and credit balance.</li>
+  <li>Send you service notifications via WhatsApp.</li>
+</ul>
+
+<h2>3. Data Sharing</h2>
+<p>We do not sell your data. We share data only with:</p>
+<ul>
+  <li><strong>Meta (Facebook/Instagram)</strong> — to publish posts via the Graph API.</li>
+  <li><strong>Anthropic</strong> — for AI content generation (no personal data included in prompts).</li>
+  <li><strong>Stripe</strong> — for payment processing.</li>
+</ul>
+
+<h2>4. Data Retention</h2>
+<p>Your data is retained while your account is active. You can disconnect your Facebook/Instagram account at any time by sending <em>disconnect</em> to the bot. To delete your account entirely, contact us.</p>
+
+<h2>5. Security</h2>
+<p>Tokens are stored encrypted at rest. We use HTTPS for all API communication. CSRF protection is applied to all OAuth flows.</p>
+
+<h2>6. Your Rights</h2>
+<p>You may request access to, correction of, or deletion of your personal data at any time by contacting us via WhatsApp or email.</p>
+
+<h2>7. Contact</h2>
+<p>Questions? Send <em>help</em> in WhatsApp or email us at privacy@catalyxai.com.</p>
+</body>
+</html>"""
+
+
+@app.get("/guide/connect-facebook", response_class=HTMLResponse)
+async def guide_connect_facebook():
+    """Step-by-step visual guide for manually connecting Facebook via Graph API Explorer."""
+    return HTMLResponse(_CONNECT_FACEBOOK_GUIDE_HTML)
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    """Privacy policy page — required for Facebook App Review."""
+    return HTMLResponse(_PRIVACY_HTML)
