@@ -962,6 +962,26 @@ async def test_facebook_instagram_tokens(client: httpx.AsyncClient):
 async def test_manual_setup_flow(client: httpx.AsyncClient):
     section("LAYER 8: Manual Token Setup Flow")
 
+    # ── 8.0 Ensure user has a profile (Layer 6 cleanup deletes it) ───────────
+    if DATABASE_URL:
+        try:
+            import psycopg2
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM conversation_state WHERE phone_number_id = %s", (TEST_PHONE,))
+            cur.execute("""
+                INSERT INTO user_profiles (phone_number_id, industry, offerings, business_goals, tone, content_style, visual_style, platform)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (phone_number_id) DO UPDATE
+                SET platform = EXCLUDED.platform
+            """, (TEST_PHONE, ['Technology'], ['Digital Products'], ['Get Customers'],
+                  ['Professional'], 'Educational', 'Minimalist', 'both'))
+            conn.commit()
+            conn.close()
+            test_pass("Profile seeded for Layer 8 (ensures 'setup' routes correctly)")
+        except Exception as e:
+            test_fail(f"Profile seed failed: {e}")
+
     # ── 8.1 Send 'setup' — expect OAuth URL + 'Connect Manually' button ───────
     payload = make_text_webhook(TEST_PHONE, "setup", "test_setup_001")
     resp = await post_webhook(client, payload)
