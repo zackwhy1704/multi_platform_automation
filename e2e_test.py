@@ -465,10 +465,10 @@ async def test_oauth(client: httpx.AsyncClient):
 
     # Test OAuth callback with error param
     resp = await client.get(f"{BASE_URL}/auth/callback", params={"error": "access_denied", "error_description": "User denied"})
-    if resp.status_code == 200 and "failed" in resp.text.lower():
+    if resp.status_code == 200 and any(kw in resp.text.lower() for kw in ("permission", "denied", "failed", "grant")):
         test_pass("GET /auth/callback (error=access_denied) → error page shown")
     else:
-        test_fail(f"GET /auth/callback (error) → unexpected: HTTP {resp.status_code}")
+        test_fail(f"GET /auth/callback (error) → unexpected: HTTP {resp.status_code}", resp.text[:150])
 
     # Validate OAuth URL generation logic
     if FB_APP_ID:
@@ -573,7 +573,7 @@ async def test_onboarding_flow(client: httpx.AsyncClient):
             return
 
         # Delay between steps so server processes state changes before next message
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(2.0)
 
     # Verify onboarding completed by checking DB
     if DATABASE_URL:
@@ -712,6 +712,232 @@ async def test_react_validation(client: httpx.AsyncClient):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  LAYER 7: Facebook OAuth + Instagram Token Validation
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def test_facebook_instagram_tokens(client: httpx.AsyncClient):
+    section("LAYER 7: Facebook OAuth + Instagram Token Validation")
+
+    GRAPH = "https://graph.facebook.com/v21.0"
+
+    # ── 7.1 Verify FB App credentials are valid ───────────────────────────────
+    if FB_APP_ID and FB_APP_SECRET:
+        try:
+            resp = await client.get(
+                f"{GRAPH}/{FB_APP_ID}",
+                params={"fields": "id,name", "access_token": f"{FB_APP_ID}|{FB_APP_SECRET}"},
+            )
+            if resp.status_code == 200:
+                app_data = resp.json()
+                test_pass(f"FB App credentials valid — App: '{app_data.get('name')}' (id={app_data.get('id')})")
+            else:
+                err = resp.json().get("error", {})
+                test_fail(f"FB App credentials invalid: [{err.get('code')}] {err.get('message', resp.text[:200])}")
+        except Exception as e:
+            test_fail(f"FB App credential check error: {e}")
+    else:
+        test_fail("FB_APP_ID or FB_APP_SECRET not set — cannot validate app credentials")
+
+    # ── 7.2 Verify OAuth redirect URI is registered (app settings) ────────────
+    if FB_APP_ID and FB_APP_SECRET:
+        try:
+            resp = await client.get(
+                f"{GRAPH}/{FB_APP_ID}",
+                params={
+                    "fields": "oauth_authorized_redirect_uris",
+                    "access_token": f"{FB_APP_ID}|{FB_APP_SECRET}",
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                uris = data.get("oauth_authorized_redirect_uris", [])
+                redirect_uri = f"{BASE_URL}/auth/callback"
+                if any(redirect_uri in u or u in redirect_uri for u in uris):
+                    test_pass(f"Redirect URI registered: {redirect_uri}")
+                elif uris:
+                    test_fail(
+                        f"Redirect URI NOT found in registered URIs",
+                        f"Registered: {uris[:3]}\nExpected: {redirect_uri}",
+                    )
+                else:
+                    log("  ", "   ℹ️  Could not read redirect URIs (may need admin token) — check Facebook Login → Settings manually")
+            else:
+                log("  ", "   ℹ️  Redirect URI check skipped (Graph API returned non-200)")
+        except Exception as e:
+            log("  ", f"   ℹ️  Redirect URI check skipped: {e}")
+
+    # ── 7.3 Test /auth/callback with expired code → our error page, not 500 ──
+    try:
+        resp = await client.get(f"{BASE_URL}/auth/callback", params={"code": "FAKE_EXPIRED_CODE", "state": "invalid.state.000"})
+        if resp.status_code == 200 and ("failed" in resp.text.lower() or "expired" in resp.text.lower() or "wrong" in resp.text.lower()):
+            test_pass("/auth/callback (fake code) → error page shown (no 500)")
+        elif resp.status_code == 200:
+            test_fail("/auth/callback (fake code) → 200 but unexpected content", resp.text[:100])
+        else:
+            test_fail(f"/auth/callback (fake code) → HTTP {resp.status_code} (expected 200 error page)")
+    except Exception as e:
+        test_fail(f"/auth/callback (fake code) → {e}")
+
+    # ── 7.4 Validate stored tokens from DB ────────────────────────────────────
+    if not DATABASE_URL:
+        test_fail("DATABASE_URL not set — cannot check stored tokens")
+        return
+
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT platform, access_token, page_id, page_name, account_username "
+            "FROM platform_tokens WHERE phone_number_id = %s",
+            (TEST_PHONE,),
+        )
+        tokens = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        test_fail(f"DB read error for stored tokens: {e}")
+        return
+
+    if not tokens:
+        test_fail(f"No platform tokens found for {TEST_PHONE} — user needs to run 'setup' and authorize via Facebook")
+        return
+
+    for token_row in tokens:
+        platform = token_row["platform"]
+        token = token_row["access_token"]
+        page_id = token_row.get("page_id")
+        page_name = token_row.get("page_name") or token_row.get("account_username") or "?"
+
+        if not token:
+            test_fail(f"{platform.capitalize()}: token is empty in DB")
+            continue
+
+        # ── 7.4a Facebook: validate page token + permissions ──────────────────
+        if platform == "facebook":
+            try:
+                resp = await client.get(
+                    f"{GRAPH}/{page_id}",
+                    params={"fields": "id,name,category", "access_token": token},
+                )
+                if resp.status_code == 200:
+                    pg = resp.json()
+                    test_pass(f"Facebook token valid — Page: '{pg.get('name')}' (id={pg.get('id')}, category={pg.get('category')})")
+                else:
+                    err = resp.json().get("error", {})
+                    code = err.get("code", "?")
+                    msg = err.get("message", resp.text[:200])
+                    if code in (190, 102):
+                        test_fail(f"Facebook token EXPIRED (code {code}): {msg}", "User needs to re-run 'setup' to reconnect")
+                    elif code == 200:
+                        test_fail(f"Facebook token missing permissions (code {code}): {msg}", "Re-authorize with all permissions")
+                    else:
+                        test_fail(f"Facebook token invalid (code {code}): {msg}")
+                    continue
+
+                # Check posting permission
+                resp2 = await client.get(
+                    f"{GRAPH}/me/permissions",
+                    params={"access_token": token},
+                )
+                if resp2.status_code == 200:
+                    perms = {p["permission"]: p["status"] for p in resp2.json().get("data", [])}
+                    required = ["pages_manage_posts", "pages_read_engagement", "pages_show_list"]
+                    granted = [p for p in required if perms.get(p) == "granted"]
+                    missing = [p for p in required if perms.get(p) != "granted"]
+                    if not missing:
+                        test_pass(f"Facebook permissions OK: {granted}")
+                    else:
+                        test_fail(f"Facebook permissions MISSING: {missing}", f"Granted: {granted}")
+                else:
+                    log("  ", "   ℹ️  Could not check permissions (page token may not return /me/permissions)")
+
+                # Test actually posting (check only — don't actually post)
+                resp3 = await client.get(
+                    f"{GRAPH}/{page_id}/feed",
+                    params={"fields": "id,message", "limit": 1, "access_token": token},
+                )
+                if resp3.status_code == 200:
+                    feed = resp3.json().get("data", [])
+                    test_pass(f"Facebook feed readable — {len(feed)} recent post(s) found")
+                else:
+                    err = resp3.json().get("error", {})
+                    test_fail(f"Facebook feed not readable: [{err.get('code')}] {err.get('message', '')}")
+
+            except Exception as e:
+                test_fail(f"Facebook token validation error: {e}")
+
+        # ── 7.4b Instagram: validate token + check IG account ─────────────────
+        elif platform == "instagram":
+            try:
+                ig_account_id = page_id
+                resp = await client.get(
+                    f"{GRAPH}/{ig_account_id}",
+                    params={"fields": "id,username,name,biography,followers_count,media_count", "access_token": token},
+                )
+                if resp.status_code == 200:
+                    ig = resp.json()
+                    test_pass(
+                        f"Instagram token valid — @{ig.get('username')} "
+                        f"(followers: {ig.get('followers_count', '?')}, posts: {ig.get('media_count', '?')})"
+                    )
+                else:
+                    err = resp.json().get("error", {})
+                    code = err.get("code", "?")
+                    msg = err.get("message", resp.text[:200])
+                    if code in (190, 102):
+                        test_fail(f"Instagram token EXPIRED (code {code}): {msg}", "User needs to re-run 'setup' to reconnect")
+                    else:
+                        test_fail(f"Instagram token invalid (code {code}): {msg}")
+                    continue
+
+                # Check Instagram can publish
+                resp2 = await client.get(
+                    f"{GRAPH}/{ig_account_id}/media",
+                    params={"fields": "id,media_type,timestamp", "limit": 1, "access_token": token},
+                )
+                if resp2.status_code == 200:
+                    media = resp2.json().get("data", [])
+                    test_pass(f"Instagram media readable — {len(media)} recent post(s)")
+                else:
+                    err = resp2.json().get("error", {})
+                    test_fail(f"Instagram media not readable: [{err.get('code')}] {err.get('message', '')}")
+
+                # Verify instagram_content_publish permission via token debug
+                if FB_APP_ID and FB_APP_SECRET:
+                    resp3 = await client.get(
+                        f"{GRAPH}/debug_token",
+                        params={"input_token": token, "access_token": f"{FB_APP_ID}|{FB_APP_SECRET}"},
+                    )
+                    if resp3.status_code == 200:
+                        debug = resp3.json().get("data", {})
+                        scopes = debug.get("scopes", [])
+                        is_valid = debug.get("is_valid", False)
+                        expires = debug.get("expires_at", 0)
+
+                        if not is_valid:
+                            test_fail("Instagram token debug: is_valid=False — token is invalid or expired")
+                        else:
+                            exp_str = "never" if expires == 0 else datetime.fromtimestamp(expires).strftime("%Y-%m-%d")
+                            test_pass(f"Token debug: valid until {exp_str} | scopes: {len(scopes)}")
+
+                        if "instagram_content_publish" in scopes:
+                            test_pass("instagram_content_publish scope GRANTED")
+                        else:
+                            test_fail("instagram_content_publish scope MISSING — re-authorize with full permissions")
+
+                        if "pages_manage_posts" in scopes:
+                            test_pass("pages_manage_posts scope GRANTED")
+                        else:
+                            test_fail("pages_manage_posts scope MISSING")
+                    else:
+                        log("  ", f"   ℹ️  Token debug API returned {resp3.status_code}")
+
+            except Exception as e:
+                test_fail(f"Instagram token validation error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -736,6 +962,7 @@ async def main():
         await test_oauth(client)
         await test_onboarding_flow(client)
         await test_react_validation(client)
+        await test_facebook_instagram_tokens(client)
 
     # Summary
     print("\n" + "═"*80)

@@ -474,7 +474,7 @@ async def handle_start(db: BotDatabase, sender: str, text: str):
         "I help businesses automate social media with AI-powered posts, "
         "images, and comment replies on *Facebook* and *Instagram*.\n\n"
         "Let's set up your profile in a few quick steps. "
-        "You'll receive *30 free credits* to get started.\n\n"
+        f"You'll receive *{FREE_SIGNUP_CREDITS} free credits* to get started.\n\n"
         "_Takes about 2 minutes_ ⚡",
     )
     await _send_industry_picker(sender)
