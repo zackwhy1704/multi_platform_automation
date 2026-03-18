@@ -22,6 +22,9 @@ from shared.config import (
     MONTHLY_CREDITS,
     PAYMENT_SERVER_URL,
     WHATSAPP_BOT_PHONE,
+    FB_APP_ID,
+    OAUTH_REDIRECT_URI,
+    PUBLIC_BASE_URL,
 )
 from shared.database import BotDatabase
 from shared.credits import CreditManager
@@ -132,8 +135,23 @@ async def receive_webhook(request: Request):
 
 
 # =========================================================================
-# FACEBOOK OAUTH CALLBACK
+# FACEBOOK OAUTH — DEBUG + CALLBACK
 # =========================================================================
+
+@app.get("/auth/debug")
+async def oauth_debug():
+    """Debug endpoint: shows OAuth config and generates a test URL."""
+    from gateway.handlers.oauth import get_oauth_url, OAUTH_SCOPES
+    test_url = get_oauth_url("debug_test_user")
+    return {
+        "fb_app_id": FB_APP_ID or "(not set)",
+        "redirect_uri": OAUTH_REDIRECT_URI or "(not set)",
+        "scopes": OAUTH_SCOPES,
+        "oauth_url": test_url or "(cannot generate — missing FB_APP_ID or OAUTH_REDIRECT_URI)",
+        "public_base_url": PUBLIC_BASE_URL or "(not set)",
+        "tip": "Open the oauth_url in a browser to test the Facebook Login flow.",
+    }
+
 
 @app.get("/auth/callback")
 async def oauth_callback(request: Request):
@@ -171,7 +189,16 @@ async def oauth_callback(request: Request):
     result = await handle_oauth_callback(code, state, app.state.db)
     if result.get("success"):
         return HTMLResponse(OAUTH_SUCCESS_HTML)
-    return HTMLResponse(OAUTH_ERROR_HTML)
+
+    # Show the actual error on the error page for debugging
+    error_detail = result.get("error", "Unknown error")
+    logger.error("OAuth callback failed: %s", error_detail)
+    error_html = OAUTH_ERROR_HTML.replace(
+        "Return to WhatsApp and send <strong>setup</strong> to try again.",
+        f"Return to WhatsApp and send <strong>setup</strong> to try again."
+        f"<br><br><small style='color:#666'>Error: {error_detail}</small>",
+    )
+    return HTMLResponse(error_html)
 
 
 # =========================================================================
