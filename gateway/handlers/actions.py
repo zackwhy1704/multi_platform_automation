@@ -469,36 +469,53 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
 # ===========================================================================
 
 async def _send_preview(sender: str, data: dict):
-    """Send a preview of the post with approve/edit/cancel buttons."""
+    """Send a preview of the post with approve/edit/cancel buttons.
+
+    Sends the actual image/video in WhatsApp so user can see what will be posted.
+    """
     platform = data.get("platform", "facebook")
     caption = data.get("caption", "")
     post_type = data.get("post_type", "text_only")
     action = POST_TYPE_ACTIONS.get(post_type, "post")
     cost = get_action_cost(action)
 
-    lines = [f"*Preview — {PLATFORM_LABELS[platform]} Post*\n"]
+    preview_header = f"*Preview — {PLATFORM_LABELS[platform]} Post*\n*Cost: {cost} credits*"
 
-    # Media info
-    if post_type == "own_media" and data.get("media_filename"):
-        from gateway.media import is_video
-        media_type = "Video" if is_video(data.get("media_mime", "")) else "Photo"
-        lines.append(f"Media: {media_type} attached")
-    elif post_type == "ai_image" and data.get("ai_image_url"):
-        lines.append("Media: AI-generated image")
-    elif post_type == "ai_video" and data.get("ai_video_url"):
-        lines.append("Media: AI-generated video")
-    elif post_type == "stock_image" and data.get("stock_image_url"):
-        lines.append(f"Media: Stock photo (by {data.get('stock_photographer', 'Pexels')})")
-    else:
-        lines.append("Media: None (text-only)")
+    # Send the actual media preview in WhatsApp
+    media_url = _resolve_media_url(data)
+    media_sent = False
 
-    lines.append(f"\n*Caption:*\n{caption[:500]}")
+    if media_url:
+        from gateway.media import is_video as _is_video
+        mime = data.get("media_mime", "")
+        is_vid = _is_video(mime) if mime else any(
+            media_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi")
+        )
+
+        if is_vid:
+            media_sent = await wa.send_video(sender, media_url, caption=preview_header)
+        else:
+            media_sent = await wa.send_image(sender, media_url, caption=preview_header)
+
+    if not media_sent:
+        # Fallback: text-only preview (no media, or media send failed)
+        lines = [preview_header, ""]
+        if post_type == "own_media" and data.get("media_filename"):
+            from gateway.media import is_video
+            media_type = "Video" if is_video(data.get("media_mime", "")) else "Photo"
+            lines.append(f"Media: {media_type} attached (preview not available)")
+        elif not media_url:
+            lines.append("Media: None (text-only)")
+        else:
+            lines.append("Media: Attached (preview failed to load)")
+        lines.append("")
+        await wa.send_text(sender, "\n".join(lines))
+
+    # Always send caption as separate text for readability
+    caption_text = f"*Caption:*\n{caption[:500]}"
     if len(caption) > 500:
-        lines.append("...(truncated)")
-
-    lines.append(f"\n*Cost: {cost} credits*")
-
-    await wa.send_text(sender, "\n".join(lines))
+        caption_text += "...(truncated)"
+    await wa.send_text(sender, caption_text)
 
     await wa.send_interactive_buttons(
         sender,

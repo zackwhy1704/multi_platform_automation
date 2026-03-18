@@ -80,6 +80,32 @@ async def send_interactive_list(to: str, body: str, button_text: str, sections: 
     return await _post(payload)
 
 
+async def send_image(to: str, image_url: str, caption: str = "") -> bool:
+    """Send an image message via URL."""
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "image",
+        "image": {"link": image_url},
+    }
+    if caption:
+        payload["image"]["caption"] = caption[:1024]
+    return await _post(payload)
+
+
+async def send_video(to: str, video_url: str, caption: str = "") -> bool:
+    """Send a video message via URL."""
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "video",
+        "video": {"link": video_url},
+    }
+    if caption:
+        payload["video"]["caption"] = caption[:1024]
+    return await _post(payload)
+
+
 async def mark_as_read(message_id: str) -> bool:
     """Mark a message as read (blue ticks)."""
     payload = {

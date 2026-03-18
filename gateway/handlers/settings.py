@@ -154,11 +154,16 @@ async def _send_manual_token_guide(sender: str):
             "*Manual Connection — Step by Step*\n\n"
             "1️⃣ Open: *developers.facebook.com/tools/explorer*\n\n"
             "2️⃣ Top-right dropdown → select your *Facebook App*\n\n"
-            "3️⃣ Click *'Generate Access Token'* (blue button)\n\n"
-            "4️⃣ Click *'Continue as [Your Name]'* → then *'OK'*\n\n"
-            "5️⃣ Copy the long token from the *Access Token* field\n"
-            "   (starts with *EAA...* or *EAAl...*)\n\n"
-            "6️⃣ Paste the token here ↓\n\n"
+            "3️⃣ Click *'Add a Permission'* and select:\n"
+            "   • *pages_manage_posts*\n"
+            "   • *pages_read_engagement*\n"
+            "   • *instagram_basic*\n"
+            "   • *instagram_content_publish*\n\n"
+            "4️⃣ Click *'Generate Access Token'* (blue button)\n\n"
+            "5️⃣ Click *'Continue as [Your Name]'* → grant *all permissions*\n\n"
+            "6️⃣ Copy the long token from the *Access Token* field\n"
+            "   (starts with *EAA...*)\n\n"
+            "7️⃣ Paste the token here ↓\n\n"
             "_Type *cancel* to go back._",
         )
 
