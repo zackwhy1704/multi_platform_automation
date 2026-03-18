@@ -44,12 +44,31 @@ stripe.api_key = STRIPE_SECRET_KEY
 db: BotDatabase = None
 
 
+def _seed_defaults(database: BotDatabase):
+    """Insert default promo codes if they don't exist yet (idempotent)."""
+    defaults = [
+        ("CATALYX50", 50, None),
+        ("ADMIN99", 999999, None),
+        ("FIRSTMONTHFREE", 1500, None),
+    ]
+    for code, credits, max_uses in defaults:
+        try:
+            database.execute_query(
+                "INSERT INTO promo_codes (code, credits_granted, max_uses, active) "
+                "VALUES (%s, %s, %s, TRUE) ON CONFLICT DO NOTHING",
+                (code, credits, max_uses),
+            )
+        except Exception as e:
+            logger.warning("Could not seed promo code %s: %s", code, e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db
     db = BotDatabase()
     app.state.db = db
     logger.info("Gateway started — database pool ready")
+    _seed_defaults(db)
     yield
     db.close()
     logger.info("Gateway shutdown — pool closed")
