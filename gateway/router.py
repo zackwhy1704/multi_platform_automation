@@ -126,6 +126,14 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
             await wa.send_text(sender, "Cancelled. Send *help* to see available commands.")
             return
 
+        # If user types a known command while in a flow, auto-cancel and run it
+        if text and text.lower().split()[0] in COMMANDS:
+            cmd_word = text.lower().split()[0]
+            db.clear_conversation_state(sender)
+            handler_fn = COMMANDS[cmd_word]
+            await handler_fn(db=db, sender=sender, text=text)
+            return
+
         handler = STATE_HANDLERS.get(state)
         if handler:
             # If this state accepts media, pass media_info

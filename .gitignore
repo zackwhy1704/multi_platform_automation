@@ -34,3 +34,5 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+media_files/
+services/media_files/

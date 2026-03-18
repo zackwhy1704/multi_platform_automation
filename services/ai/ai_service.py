@@ -5,6 +5,7 @@ Integrates with Pexels API for stock images.
 """
 
 import logging
+import time
 from typing import Optional
 
 import anthropic
@@ -15,6 +16,38 @@ from shared.config import ANTHROPIC_API_KEY, AI_MODEL, PEXELS_API_KEY
 logger = logging.getLogger(__name__)
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+
+MAX_RETRIES = 3
+RETRY_DELAYS = [2, 5, 10]  # seconds between retries
+
+
+def _call_claude(*, model: str = AI_MODEL, max_tokens: int = 1024, messages: list) -> Optional[str]:
+    """Call Claude with retry logic for transient errors (529 overloaded, 5xx)."""
+    if not client:
+        logger.error("Anthropic API key not configured")
+        return None
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+            return response.content[0].text.strip()
+        except anthropic.APIStatusError as e:
+            if e.status_code in (429, 529, 500, 502, 503) and attempt < MAX_RETRIES - 1:
+                delay = RETRY_DELAYS[attempt]
+                logger.warning("Claude API %d (attempt %d/%d), retrying in %ds...",
+                               e.status_code, attempt + 1, MAX_RETRIES, delay)
+                time.sleep(delay)
+                continue
+            logger.error("Claude API error (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
+            return None
+        except Exception as e:
+            logger.error("Claude API unexpected error: %s", e)
+            return None
+    return None
 
 
 def generate_post(
@@ -33,10 +66,6 @@ def generate_post(
     Returns:
         Generated post text, or None on failure
     """
-    if not client:
-        logger.error("Anthropic API key not configured")
-        return None
-
     industry = ", ".join(profile.get("industry", []))
     offerings = ", ".join(profile.get("offerings", []))
     goals = ", ".join(profile.get("business_goals", []))
@@ -68,16 +97,7 @@ Business profile:
 
 Write ONE post. Output ONLY the post text, no preamble or explanation."""
 
-    try:
-        response = client.messages.create(
-            model=AI_MODEL,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text.strip()
-    except Exception as e:
-        logger.error("AI generation failed: %s", e)
-        return None
+    return _call_claude(max_tokens=1024, messages=[{"role": "user", "content": prompt}])
 
 
 def generate_reply(
@@ -87,9 +107,6 @@ def generate_reply(
     tone: str = "professional",
 ) -> Optional[str]:
     """Generate an AI reply to a comment."""
-    if not client:
-        return None
-
     prompt = f"""You are replying to a comment on {platform}.
 
 Original post: {original_post[:500]}
@@ -98,16 +115,7 @@ Tone: {tone}
 
 Write a brief, authentic reply (1-3 sentences). Output ONLY the reply text."""
 
-    try:
-        response = client.messages.create(
-            model=AI_MODEL,
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text.strip()
-    except Exception as e:
-        logger.error("AI reply generation failed: %s", e)
-        return None
+    return _call_claude(max_tokens=256, messages=[{"role": "user", "content": prompt}])
 
 
 def generate_caption_for_media(
@@ -117,10 +125,6 @@ def generate_caption_for_media(
     topic: Optional[str] = None,
 ) -> Optional[str]:
     """Generate a caption/description for user-provided media."""
-    if not client:
-        logger.error("Anthropic API key not configured")
-        return None
-
     industry = ", ".join(profile.get("industry", []))
     offerings = ", ".join(profile.get("offerings", []))
     tone = ", ".join(profile.get("tone", ["professional"]))
@@ -145,24 +149,11 @@ Business profile:
 The user is posting a {media_type}. Write a caption that complements it.
 Output ONLY the caption text, no preamble."""
 
-    try:
-        response = client.messages.create(
-            model=AI_MODEL,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text.strip()
-    except Exception as e:
-        logger.error("AI caption generation failed: %s", e)
-        return None
+    return _call_claude(max_tokens=512, messages=[{"role": "user", "content": prompt}])
 
 
 def generate_image_search_query(profile: dict, topic: Optional[str] = None) -> str:
     """Use AI to generate a good Pexels search query based on the business profile."""
-    if not client:
-        # Fallback: use industry as search term
-        return " ".join(profile.get("industry", ["business"]))
-
     industry = ", ".join(profile.get("industry", []))
     offerings = ", ".join(profile.get("offerings", []))
 
@@ -176,17 +167,10 @@ Products/Services: {offerings}
 
 Output ONLY the search query, nothing else. Example: "coffee shop interior" or "team meeting office"."""
 
-    try:
-        response = client.messages.create(
-            model=AI_MODEL,
-            max_tokens=30,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        query = response.content[0].text.strip().strip('"').strip("'")
-        return query
-    except Exception as e:
-        logger.error("AI search query generation failed: %s", e)
-        return " ".join(profile.get("industry", ["business"]))
+    result = _call_claude(max_tokens=30, messages=[{"role": "user", "content": prompt}])
+    if result:
+        return result.strip('"').strip("'")
+    return " ".join(profile.get("industry", ["business"]))
 
 
 async def fetch_stock_image(query: str) -> Optional[dict]:

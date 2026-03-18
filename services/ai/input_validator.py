@@ -101,6 +101,7 @@ def _llm_validate(text: str, ctx: dict) -> Optional[dict]:
 
     try:
         import anthropic
+        import time
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
         prompt = f"""You are validating a user's input during a business profile onboarding flow.
@@ -127,13 +128,24 @@ ACTION: Choose exactly one:
 Respond in this exact JSON format (no other text):
 {{"thought": "your reasoning", "action": "accept|clarify|reject", "cleaned": "normalized input if accept, null otherwise", "message": "friendly message to user if clarify/reject, null if accept"}}"""
 
-        response = client.messages.create(
-            model=AI_MODEL,
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        raw = None
+        for attempt in range(3):
+            try:
+                response = client.messages.create(
+                    model=AI_MODEL,
+                    max_tokens=256,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                raw = response.content[0].text.strip()
+                break
+            except anthropic.APIStatusError as e:
+                if e.status_code in (429, 529, 500, 502, 503) and attempt < 2:
+                    time.sleep([2, 5][attempt])
+                    continue
+                raise
 
-        raw = response.content[0].text.strip()
+        if not raw:
+            return None
         # Parse JSON from response (handle markdown code blocks)
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()

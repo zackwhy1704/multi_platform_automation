@@ -148,7 +148,14 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
     if state == ConversationState.AWAITING_POST_PLATFORM:
         platform = text.lower()
         if platform not in PLATFORM_LABELS:
-            await wa.send_text(sender, "Please choose Facebook or Instagram.")
+            await wa.send_interactive_buttons(
+                sender,
+                "Please tap one of the buttons below:",
+                [
+                    {"id": "facebook", "title": "Facebook"},
+                    {"id": "instagram", "title": "Instagram"},
+                ],
+            )
             return
 
         token = db.get_platform_token(sender, platform)
@@ -228,7 +235,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             )
 
         else:
-            await wa.send_text(sender, "Please choose one of the options from the list.")
+            await _send_content_type_options(sender, platform)
 
     # --- WAITING FOR MEDIA (photo/video) ---
     elif state == ConversationState.AWAITING_POST_MEDIA:
@@ -528,7 +535,7 @@ def _resolve_media_url(data: dict) -> str | None:
 
 
 async def _publish_post(db: BotDatabase, sender: str, data: dict):
-    """Deduct credits and dispatch the post to the platform."""
+    """Deduct credits and publish to the platform directly via Graph API."""
     platform = data.get("platform", "facebook")
     caption = data.get("caption", "")
     post_type = data.get("post_type", "text_only")
@@ -546,22 +553,39 @@ async def _publish_post(db: BotDatabase, sender: str, data: dict):
 
     await wa.send_text(sender, f"Publishing to {PLATFORM_LABELS[platform]}...")
 
-    # Dispatch to Celery task
-    from workers.celery_app import celery_app
-    task_name = f"services.{platform}.tasks.post_task"
-    celery_app.send_task(
-        task_name,
-        args=[sender, caption],
-        kwargs={"media_url": media_url} if media_url else {},
-        queue=f"{platform}_posting",
-    )
+    # Publish directly via Graph API (no Celery/Redis required)
+    from services.publisher import publish_to_facebook, publish_to_instagram
+
+    if platform == "facebook":
+        result = await publish_to_facebook(db, sender, caption, media_url)
+    else:
+        result = await publish_to_instagram(db, sender, caption, media_url)
 
     cost = get_action_cost(action)
     balance = cm.get_balance(sender)
-    await wa.send_text(
-        sender,
-        f"Credits used: *{cost}* | Remaining: *{balance}*",
-    )
+
+    if result.get("success"):
+        await wa.send_text(
+            sender,
+            f"✅ *Published to {PLATFORM_LABELS[platform]}!*\n\n"
+            f"{caption[:100]}{'...' if len(caption) > 100 else ''}\n\n"
+            f"Credits used: *{cost}* | Remaining: *{balance}*",
+        )
+    else:
+        # Refund credits on failure
+        db.execute_query(
+            "UPDATE users SET credits_remaining = credits_remaining + %s, "
+            "credits_used = GREATEST(credits_used - %s, 0) WHERE phone_number_id = %s",
+            (cost, cost, sender),
+        )
+        balance = cm.get_balance(sender)
+        error = result.get("error", "Unknown error")
+        await wa.send_text(
+            sender,
+            f"❌ *Publishing failed:* {error}\n\n"
+            f"Your *{cost} credits* have been refunded. Remaining: *{balance}*\n\n"
+            f"Send *post* to try again.",
+        )
 
 
 # ===========================================================================
@@ -629,7 +653,14 @@ async def handle_auto_step(db: BotDatabase, sender: str, text: str,
     if state == ConversationState.AWAITING_AUTO_PLATFORM:
         platform = text.lower()
         if platform not in PLATFORM_LABELS:
-            await wa.send_text(sender, "Please choose Facebook or Instagram.")
+            await wa.send_interactive_buttons(
+                sender,
+                "Please tap one of the buttons below:",
+                [
+                    {"id": "facebook", "title": "Facebook"},
+                    {"id": "instagram", "title": "Instagram"},
+                ],
+            )
             return
         data["platform"] = platform
         db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_COUNT, data)
@@ -642,7 +673,7 @@ async def handle_auto_step(db: BotDatabase, sender: str, text: str,
         except ValueError:
             count = 0
         if count not in (3, 5, 7):
-            await wa.send_text(sender, "Please choose 3, 5, or 7 posts.")
+            await _send_auto_count_options(sender)
             return
         data["count"] = count
         db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_TYPE, data)
@@ -675,7 +706,20 @@ async def handle_auto_step(db: BotDatabase, sender: str, text: str,
         content_type = text.lower().replace(" ", "_")
         valid_types = {"stock_image", "ai_image", "ai_video", "text_only"}
         if content_type not in valid_types:
-            await wa.send_text(sender, "Please choose from the list above.")
+            # Re-send the content type list
+            rows = [
+                {"id": "stock_image", "title": "Stock Images", "description": f"{ACTION_COSTS['stock_image_post']} credits each"},
+                {"id": "ai_image", "title": "AI Images", "description": f"{ACTION_COSTS['ai_image_post']} credits each"},
+                {"id": "ai_video", "title": "AI Videos", "description": f"{ACTION_COSTS['ai_video_post']} credits each"},
+            ]
+            if data.get("platform") == "facebook":
+                rows.append({"id": "text_only", "title": "Text Only", "description": f"{ACTION_COSTS['text_post']} credits each"})
+            await wa.send_interactive_list(
+                sender,
+                "Please choose a content type from the list:",
+                "Choose Type",
+                [{"title": "Content Types", "rows": rows}],
+            )
             return
 
         count = data.get("count", 3)
@@ -893,7 +937,14 @@ async def handle_reply_step(db: BotDatabase, sender: str, text: str,
                             state: ConversationState, data: dict, **kwargs):
     platform = text.lower()
     if platform not in PLATFORM_LABELS:
-        await wa.send_text(sender, "Please choose Facebook or Instagram.")
+        await wa.send_interactive_buttons(
+            sender,
+            "Please tap one of the buttons below:",
+            [
+                {"id": "facebook", "title": "Facebook"},
+                {"id": "instagram", "title": "Instagram"},
+            ],
+        )
         return
     db.clear_conversation_state(sender)
     cm = CreditManager(db)

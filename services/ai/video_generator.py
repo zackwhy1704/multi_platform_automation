@@ -51,7 +51,7 @@ async def generate_video(
     prompt: str,
     duration: str = "5",
     aspect_ratio: str = "1:1",
-    model: str = "kling-v2",
+    model: str = "kling-v1",
 ) -> Optional[dict]:
     """
     Generate a video using Kling AI text-to-video.

@@ -1,18 +1,28 @@
 """
 AI image generation using OpenAI gpt-image-1.
 
-Replaces DALL-E 3 (deprecated May 2026).
-Generates custom images from text prompts for social media posts.
+gpt-image-1 returns base64 by default (not URLs like DALL-E 3).
+We decode the base64 image, save it locally, and return a public URL
+so it can be used by Facebook/Instagram Graph API for posting.
 """
 
+import base64
 import logging
+import os
+import uuid
 from typing import Optional
 
-from shared.config import OPENAI_API_KEY
+from shared.config import OPENAI_API_KEY, PUBLIC_BASE_URL
 
 logger = logging.getLogger(__name__)
 
 _client = None
+
+# Use the SAME media directory as the gateway (project_root/media_files)
+# gateway/media.py uses: os.path.dirname(os.path.dirname(__file__)) → project root
+# This file is at services/ai/image_generator.py, so go up 2 levels to project root
+MEDIA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "media_files")
+os.makedirs(MEDIA_DIR, exist_ok=True)
 
 
 def _get_client():
@@ -27,13 +37,8 @@ def generate_image(prompt: str, size: str = "1024x1024", style: str = "vivid") -
     """
     Generate an image using OpenAI gpt-image-1.
 
-    Args:
-        prompt: Text description of the image to generate
-        size: Image size — "1024x1024", "1792x1024", or "1024x1792"
-        style: "vivid" (dramatic) or "natural" (realistic)
-
     Returns:
-        URL of the generated image, or None on failure.
+        Public URL of the generated image (served from our gateway), or None on failure.
     """
     client = _get_client()
     if not client:
@@ -47,9 +52,39 @@ def generate_image(prompt: str, size: str = "1024x1024", style: str = "vivid") -
             n=1,
             size=size,
         )
-        image_url = result.data[0].url
-        logger.info("Generated image: %s... (prompt: %s...)", image_url[:60], prompt[:50])
-        return image_url
+
+        image_data = result.data[0]
+
+        # gpt-image-1 returns base64 by default
+        if image_data.b64_json:
+            # Decode base64 and save to file
+            img_bytes = base64.b64decode(image_data.b64_json)
+            filename = f"ai_{uuid.uuid4().hex}.png"
+            file_path = os.path.join(MEDIA_DIR, filename)
+
+            with open(file_path, "wb") as f:
+                f.write(img_bytes)
+
+            logger.info("Generated image saved: %s (%d bytes, prompt: %s...)",
+                        filename, len(img_bytes), prompt[:50])
+
+            # Return public URL served by our gateway
+            if PUBLIC_BASE_URL:
+                return f"{PUBLIC_BASE_URL}/media/{filename}"
+            else:
+                logger.error("PUBLIC_BASE_URL not set — cannot serve generated image")
+                return None
+
+        elif image_data.url:
+            # Fallback: if URL is returned (e.g. dall-e-3 compatibility)
+            logger.info("Generated image URL: %s... (prompt: %s...)",
+                        image_data.url[:60], prompt[:50])
+            return image_data.url
+
+        else:
+            logger.error("No image data in response")
+            return None
+
     except Exception as e:
         logger.error("Image generation failed: %s", e)
         return None
@@ -62,17 +97,11 @@ def build_image_prompt(
     topic: Optional[str] = None,
     platform: str = "instagram",
 ) -> str:
-    """
-    Build an optimized image generation prompt using the user's business profile.
-
-    Uses content_style and visual_style from enhanced onboarding to create
-    on-brand images (e.g. humorous cartoon for a comedy bakery account).
-    """
+    """Build an optimized image generation prompt using the user's business profile."""
     industry = ", ".join(profile.get("industry", ["business"]))
     offerings = ", ".join(profile.get("offerings", []))
     tone = ", ".join(profile.get("tone", ["professional"]))
 
-    # Map content styles to prompt modifiers
     style_modifiers = {
         "humorous": "funny, comedic, lighthearted, meme-worthy",
         "educational": "informative, clean, diagram-like, professional infographic style",
@@ -82,7 +111,6 @@ def build_image_prompt(
         "mixed": "engaging, eye-catching, social media optimized",
     }
 
-    # Map visual styles to prompt modifiers
     visual_modifiers = {
         "cartoon": "cartoon illustration style, colorful, fun, vector art",
         "minimalist": "clean minimalist design, white space, modern, simple",
