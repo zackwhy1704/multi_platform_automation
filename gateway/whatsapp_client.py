@@ -12,11 +12,22 @@ from shared.config import WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_TOKEN
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = f"https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-HEADERS = {
-    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-    "Content-Type": "application/json",
-}
+GRAPH_API_VERSION = "v21.0"
+
+
+def _get_url() -> str:
+    """Build messages URL using current config (not stale module-level value)."""
+    from shared.config import WHATSAPP_PHONE_NUMBER_ID as _phone_id
+    return f"https://graph.facebook.com/{GRAPH_API_VERSION}/{_phone_id}/messages"
+
+
+def _get_headers() -> dict:
+    """Build auth headers using current config (not stale module-level value)."""
+    from shared.config import WHATSAPP_TOKEN as _token
+    return {
+        "Authorization": f"Bearer {_token.strip()}",
+        "Content-Type": "application/json",
+    }
 
 
 async def send_text(to: str, body: str) -> bool:
@@ -80,17 +91,27 @@ async def mark_as_read(message_id: str) -> bool:
 
 
 async def _post(payload: dict) -> bool:
-    """Send a request to the WhatsApp Cloud API."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(BASE_URL, json=payload, headers=HEADERS)
-            if resp.status_code != 200:
-                logger.error("WhatsApp API error %s: %s", resp.status_code, resp.text)
+    """Send a request to the WhatsApp Cloud API with one retry on 5xx."""
+    url = _get_url()
+    headers = _get_headers()
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                if resp.status_code == 200:
+                    return True
+                if resp.status_code >= 500 and attempt == 0:
+                    logger.warning("WhatsApp API %s (attempt 1), retrying...", resp.status_code)
+                    continue
+                logger.error("WhatsApp API error %s: %s", resp.status_code, resp.text[:300])
                 return False
-            return True
-    except Exception as e:
-        logger.error("WhatsApp send failed: %s", e)
-        return False
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("WhatsApp send error (attempt 1), retrying: %s", e)
+                continue
+            logger.error("WhatsApp send failed: %s", e)
+            return False
+    return False
 
 
 def send_text_sync(to: str, body: str) -> bool:
