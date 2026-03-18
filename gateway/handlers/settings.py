@@ -279,7 +279,25 @@ async def _validate_and_store_manual_token(sender: str, token: str, db: BotDatab
                 )
                 ig_connected = True
 
-            # Step 6: Confirm to user
+            # Step 6: Verify posting permission with a dry-run
+            perm_ok = True
+            perm_warning = ""
+            try:
+                perm_resp = await client.get(
+                    f"{GRAPH_API}/{page_id}",
+                    params={"access_token": page_token, "fields": "id,name"},
+                )
+                if perm_resp.status_code != 200:
+                    perm_ok = False
+                    perm_warning = (
+                        "\n\n⚠️ *Warning:* Your token may lack posting permissions.\n"
+                        "If posting fails, use *setup* → OAuth link (Option 1) instead — "
+                        "it grants all required permissions automatically."
+                    )
+            except Exception:
+                pass
+
+            # Step 7: Confirm to user
             msg = f"✅ *Facebook connected!*\n\nPage: *{page_name}*\n"
             if ig_connected:
                 ig_label = f"@{ig_username}" if ig_username else "Linked"
@@ -291,6 +309,7 @@ async def _validate_and_store_manual_token(sender: str, token: str, db: BotDatab
                 other = ", ".join(p["name"] for p in pages[1:3])
                 msg += f"\n_Other pages found: {other}_\n_(Currently using: {page_name})_"
 
+            msg += perm_warning
             msg += "\n\nSend *post* to create your first post!"
 
             db.clear_conversation_state(sender)

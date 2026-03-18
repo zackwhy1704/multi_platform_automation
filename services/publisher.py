@@ -1,11 +1,12 @@
 """
 Direct publisher — posts to Facebook/Instagram via Graph API inline.
 
-Replaces Celery dispatch for single-service Railway deployments where
-no Redis or Celery worker is available.
+Facebook posting requires a Page Access Token with:
+  - pages_manage_posts
+  - pages_read_engagement
 
-Facebook posting requires a Page Access Token with pages_manage_posts permission.
-The old publish_actions permission was deprecated in 2018.
+The token stored during setup (OAuth or manual) should already be a
+Page Access Token extracted from /me/accounts.
 """
 
 import asyncio
@@ -19,81 +20,28 @@ logger = logging.getLogger(__name__)
 GRAPH_API = "https://graph.facebook.com/v21.0"
 
 
-async def _get_page_token(client: httpx.AsyncClient, stored_token: str, page_id: str) -> tuple[str, str]:
-    """
-    Ensure we have a valid Page Access Token (not a User Access Token).
-
-    If the stored token is a User token, fetches the Page token from /me/accounts.
-    Returns (page_token, page_id).
-    """
-    # Check if stored token is already a Page token by trying /me
-    # Page tokens return the page info; User tokens return user info
-    me_resp = await client.get(
-        f"{GRAPH_API}/me",
-        params={"access_token": stored_token, "fields": "id,name"},
-    )
-
-    if me_resp.status_code == 200:
-        me_data = me_resp.json()
-        me_id = me_data.get("id", "")
-
-        # If me_id matches page_id, this IS a page token — good
-        if me_id == page_id:
-            return stored_token, page_id
-
-        # Otherwise it's a User token — get the Page token
-        pages_resp = await client.get(
-            f"{GRAPH_API}/me/accounts",
-            params={"access_token": stored_token, "fields": "id,name,access_token"},
-        )
-
-        if pages_resp.status_code == 200:
-            pages = pages_resp.json().get("data", [])
-
-            # Find the matching page
-            for page in pages:
-                if page.get("id") == page_id:
-                    page_token = page.get("access_token", stored_token)
-                    logger.info("Resolved Page token for page %s", page_id)
-                    return page_token, page_id
-
-            # If page_id not in list, use first page
-            if pages:
-                page = pages[0]
-                page_token = page.get("access_token", stored_token)
-                resolved_id = page.get("id", page_id)
-                logger.info("Using first page %s (requested %s)", resolved_id, page_id)
-                return page_token, resolved_id
-
-    # Fallback: use stored token as-is
-    return stored_token, page_id
-
-
 async def publish_to_facebook(
     db: BotDatabase, sender: str, caption: str, media_url: str | None = None
 ) -> dict:
-    """Post to a Facebook Page via Graph API (async, no Celery).
+    """Post to a Facebook Page via Graph API.
 
-    Uses Page Access Token and modern endpoints:
-    - Text: /{page_id}/feed (requires pages_manage_posts)
-    - Photo: /{page_id}/photos (requires pages_manage_posts)
-    - Video: /{page_id}/videos (requires pages_manage_posts)
+    Endpoints:
+    - Text:  POST /{page_id}/feed      → pages_manage_posts
+    - Photo: POST /{page_id}/photos    → pages_manage_posts + pages_read_engagement
+    - Video: POST /{page_id}/videos    → pages_manage_posts + pages_read_engagement
     """
     token_data = db.get_platform_token(sender, "facebook")
     if not token_data or not token_data.get("access_token"):
         return {"success": False, "error": "No Facebook token. Send *setup* to connect."}
 
-    stored_token = token_data["access_token"]
+    access_token = token_data["access_token"]
     page_id = token_data.get("page_id")
+
+    if not page_id:
+        return {"success": False, "error": "No Facebook Page ID stored. Send *setup* to reconnect."}
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            # Always resolve to a proper Page Access Token
-            access_token, page_id = await _get_page_token(client, stored_token, page_id or "")
-
-            if not page_id:
-                return {"success": False, "error": "No Facebook Page found. Send *setup* to reconnect."}
-
             # Build request based on content type
             if media_url:
                 is_video = any(media_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi"))
@@ -106,7 +54,6 @@ async def publish_to_facebook(
                         "access_token": access_token,
                     }
                 else:
-                    # Photo post — use /photos endpoint
                     endpoint = f"{GRAPH_API}/{page_id}/photos"
                     payload = {
                         "url": media_url,
@@ -114,7 +61,6 @@ async def publish_to_facebook(
                         "access_token": access_token,
                     }
             else:
-                # Text-only post
                 endpoint = f"{GRAPH_API}/{page_id}/feed"
                 payload = {
                     "message": caption,
@@ -125,39 +71,17 @@ async def publish_to_facebook(
 
             if resp.status_code != 200:
                 error_data = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
-                error_msg = error_data.get("error", {}).get("message", resp.text[:200])
-                error_code = error_data.get("error", {}).get("code", 0)
-                error_subcode = error_data.get("error", {}).get("error_subcode", 0)
+                fb_error = error_data.get("error", {})
+                error_msg = fb_error.get("message", resp.text[:200])
+                error_code = fb_error.get("code", 0)
 
-                logger.error("Facebook post failed for %s: code=%s subcode=%s msg=%s",
-                             sender, error_code, error_subcode, error_msg)
+                logger.error("Facebook post failed for %s: code=%s msg=%s",
+                             sender, error_code, error_msg)
 
-                # Provide actionable error messages
-                if error_code == 200 or "publish_actions" in error_msg.lower():
-                    return {
-                        "success": False,
-                        "error": (
-                            "Your Facebook token doesn't have posting permission.\n\n"
-                            "Send *setup* to reconnect — make sure to grant "
-                            "*all permissions* when Facebook asks."
-                        ),
-                    }
-                elif error_code == 190:
-                    return {
-                        "success": False,
-                        "error": "Your Facebook token has expired. Send *setup* to reconnect.",
-                    }
-
-                return {"success": False, "error": error_msg}
+                return {"success": False, "error": _friendly_fb_error(error_code, error_msg)}
 
             post_id = resp.json().get("id", resp.json().get("post_id", ""))
             db.log_automation_action(sender, "facebook", "post", 1)
-
-            # Update stored token if we resolved a better one
-            if access_token != stored_token:
-                db.save_platform_token(sender, "facebook", access_token, page_id,
-                                       page_name=token_data.get("page_name", ""))
-
             logger.info("Facebook post published for %s: %s", sender, post_id)
             return {"success": True, "post_id": post_id}
 
@@ -168,16 +92,45 @@ async def publish_to_facebook(
         return {"success": False, "error": str(e)}
 
 
+def _friendly_fb_error(code: int, msg: str) -> str:
+    """Convert Facebook error codes to user-friendly messages."""
+    msg_lower = msg.lower()
+
+    if code == 190 or "expired" in msg_lower:
+        return "Your Facebook token has expired. Send *setup* to reconnect."
+
+    if code == 200 or "publish_actions" in msg_lower:
+        return (
+            "Missing *pages_manage_posts* permission.\n\n"
+            "Send *setup* and use the *OAuth link* (Option 1) to reconnect — "
+            "it automatically requests all required permissions."
+        )
+
+    if code == 283 or "pages_read_engagement" in msg_lower:
+        return (
+            "Missing *pages_read_engagement* permission.\n\n"
+            "Send *setup* and use the *OAuth link* (Option 1) to reconnect — "
+            "it automatically requests all required permissions."
+        )
+
+    if code == 368 or "temporarily blocked" in msg_lower:
+        return "Facebook has temporarily blocked posting. Try again in a few hours."
+
+    if "url" in msg_lower and ("not accessible" in msg_lower or "could not download" in msg_lower):
+        return (
+            "Facebook couldn't download the image/video. "
+            "The file may have expired. Please try again with a new upload."
+        )
+
+    return msg
+
+
 async def publish_to_instagram(
     db: BotDatabase, sender: str, caption: str, media_url: str | None = None
 ) -> dict:
-    """Post to Instagram via Graph API (async, no Celery).
+    """Post to Instagram via Graph API.
 
-    Instagram posting flow:
-    1. Create media container (image_url or video_url)
-    2. Wait for processing
-    3. Publish the container
-
+    Flow: create container → poll status → publish.
     Requires: instagram_basic, instagram_content_publish, pages_read_engagement
     """
     token_data = db.get_platform_token(sender, "instagram")
@@ -190,24 +143,11 @@ async def publish_to_instagram(
     if not media_url:
         return {"success": False, "error": "Instagram requires an image or video. Post cancelled."}
 
+    if not ig_account_id:
+        return {"success": False, "error": "No Instagram account ID. Send *setup* to reconnect."}
+
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            # Resolve IG account ID if missing
-            if not ig_account_id:
-                resp = await client.get(
-                    f"{GRAPH_API}/me/accounts",
-                    params={"access_token": access_token, "fields": "id,instagram_business_account"},
-                )
-                pages = resp.json().get("data", []) if resp.status_code == 200 else []
-                for page in pages:
-                    ig = page.get("instagram_business_account", {}).get("id")
-                    if ig:
-                        ig_account_id = ig
-                        break
-                if not ig_account_id:
-                    return {"success": False, "error": "No Instagram Business Account linked to your Page."}
-                db.save_platform_token(sender, "instagram", access_token, ig_account_id)
-
             # Step 1: Create media container
             is_video = any(media_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi"))
             container_data = {"caption": caption, "access_token": access_token}
@@ -220,18 +160,15 @@ async def publish_to_instagram(
             resp = await client.post(f"{GRAPH_API}/{ig_account_id}/media", data=container_data)
             if resp.status_code != 200:
                 error_data = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
-                error_msg = error_data.get("error", {}).get("message", resp.text[:200])
-                error_code = error_data.get("error", {}).get("code", 0)
-
-                if error_code == 190:
-                    return {"success": False, "error": "Token expired. Send *setup* to reconnect."}
-
-                return {"success": False, "error": error_msg}
+                fb_error = error_data.get("error", {})
+                error_msg = fb_error.get("message", resp.text[:200])
+                error_code = fb_error.get("code", 0)
+                return {"success": False, "error": _friendly_fb_error(error_code, error_msg)}
 
             creation_id = resp.json().get("id")
 
-            # Step 2: Poll for processing (videos take longer)
-            max_wait = 60 if is_video else 15
+            # Step 2: Poll for processing completion
+            max_wait = 60 if is_video else 20
             poll_interval = 5
             for _ in range(max_wait // poll_interval):
                 await asyncio.sleep(poll_interval)
@@ -245,8 +182,7 @@ async def publish_to_instagram(
                     if status == "FINISHED":
                         break
                     elif status == "ERROR":
-                        return {"success": False, "error": "Instagram media processing failed."}
-                    # IN_PROGRESS — continue polling
+                        return {"success": False, "error": "Instagram media processing failed. Try a different image/video."}
 
             # Step 3: Publish
             pub_resp = await client.post(
@@ -255,8 +191,10 @@ async def publish_to_instagram(
             )
             if pub_resp.status_code != 200:
                 error_data = pub_resp.json() if "application/json" in pub_resp.headers.get("content-type", "") else {}
-                error_msg = error_data.get("error", {}).get("message", pub_resp.text[:200])
-                return {"success": False, "error": error_msg}
+                fb_error = error_data.get("error", {})
+                error_msg = fb_error.get("message", pub_resp.text[:200])
+                error_code = fb_error.get("code", 0)
+                return {"success": False, "error": _friendly_fb_error(error_code, error_msg)}
 
             media_id = pub_resp.json().get("id", "")
             db.log_automation_action(sender, "instagram", "post", 1)
