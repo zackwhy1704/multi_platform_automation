@@ -12,7 +12,7 @@ import logging
 import httpx
 
 from shared.database import BotDatabase
-from shared.config import FB_APP_ID, FB_APP_SECRET, PUBLIC_BASE_URL
+from shared.config import FB_APP_ID, FB_APP_SECRET, PUBLIC_BASE_URL, WHATSAPP_BOT_PHONE
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
 from gateway.handlers.oauth import get_oauth_url
@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 PLATFORM_LABELS = {"facebook": "Facebook", "instagram": "Instagram"}
 GRAPH_API = "https://graph.facebook.com/v21.0"
+
+
+def _looks_like_token(text: str) -> bool:
+    """Check if text looks like a Facebook access token (EAA... 50+ chars)."""
+    s = text.strip()
+    return len(s) > 50 and s.startswith("EAA")
 
 
 def _account_label(token_data: dict, platform: str) -> str:
@@ -38,6 +44,12 @@ def _account_label(token_data: dict, platform: str) -> str:
     elif token_data.get("page_id"):
         return f"ID: {token_data['page_id']}"
     return "Connected"
+
+
+def _wa_return_btn(label: str = "Return to WhatsApp") -> str:
+    """WhatsApp deep link for inline use in WhatsApp messages."""
+    href = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
+    return href
 
 
 async def handle_settings(db: BotDatabase, sender: str, text: str):
@@ -112,7 +124,7 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
             "Facebook Login not working? Connect manually instead:",
             [{"id": "connect_manually", "title": "Connect Manually"}],
         )
-        # Keep state so "Connect Manually" button is handled
+        # Keep state so both "Connect Manually" button AND direct token pastes are handled
         db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {})
 
     else:
@@ -124,14 +136,16 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
 async def _send_manual_token_guide(sender: str):
     """Send step-by-step instructions for getting a Facebook token manually."""
     guide_url = f"{PUBLIC_BASE_URL}/guide/connect-facebook" if PUBLIC_BASE_URL else None
+    wa_url = _wa_return_btn()
 
     if guide_url:
         await wa.send_text(
             sender,
-            "*Option 2 — Manual Connection*\n\n"
+            "*Manual Connection*\n\n"
             "Follow this step-by-step guide to get your Facebook token:\n\n"
             f"📖 *Guide:* {guide_url}\n\n"
-            "Once you have your token, *paste it here* and we'll connect your account.\n\n"
+            "After getting the token, come back here and *paste it below*.\n\n"
+            f"📲 *Return here:* {wa_url}\n\n"
             "_Type *cancel* to go back._",
         )
     else:
@@ -165,6 +179,10 @@ async def _validate_and_store_manual_token(sender: str, token: str, db: BotDatab
                 params={"access_token": token, "fields": "id,name"},
             )
             if me_resp.status_code != 200:
+                error_data = me_resp.json() if me_resp.headers.get("content-type", "").startswith("application/json") else {}
+                error_msg = error_data.get("error", {}).get("message", "")
+                logger.warning("Manual token validation failed for %s: %s", sender, error_msg or me_resp.text[:200])
+
                 await wa.send_text(
                     sender,
                     "❌ *Invalid token.*\n\n"
@@ -190,6 +208,7 @@ async def _validate_and_store_manual_token(sender: str, token: str, db: BotDatab
                 )
                 if ll_resp.status_code == 200:
                     long_token = ll_resp.json().get("access_token", token)
+                    logger.info("Long-lived token obtained for %s", sender)
 
             # Step 3: Get pages (works for user tokens; page tokens return empty)
             pages_resp = await client.get(
@@ -352,16 +371,24 @@ async def handle_setup_step(
             await wa.send_text(sender, "Please choose an account to disconnect.")
         return
 
-    # --- MANUAL CHOOSE STATE (shown OAuth + waiting for "Connect Manually" button) ---
+    # --- MANUAL CHOOSE STATE (shown OAuth + waiting for "Connect Manually" button or token paste) ---
     if state == ConversationState.SETUP_MANUAL_CHOOSE:
-        if text == "connect_manually":
+        # Normalize: accept both button ID "connect_manually" and typed "connect manually"
+        normalized = text.lower().strip().replace(" ", "_")
+
+        if normalized == "connect_manually":
             await _send_manual_token_guide(sender)
             db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
+        elif _looks_like_token(text):
+            # User skipped the guide and pasted a token directly — handle it
+            db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
+            await _validate_and_store_manual_token(sender, text.strip(), db)
         else:
-            # Re-show the options (e.g. user typed something random)
+            # Re-show the options
             await wa.send_interactive_buttons(
                 sender,
-                "Tap below to connect manually, or tap the OAuth link sent earlier:",
+                "Tap the button below to connect manually, or tap the OAuth link sent earlier.\n\n"
+                "_You can also paste a Facebook token directly here._",
                 [{"id": "connect_manually", "title": "Connect Manually"}],
             )
         return
@@ -390,7 +417,7 @@ async def handle_setup_step(
     # --- MANUAL FACEBOOK TOKEN ENTRY ---
     elif state == ConversationState.SETUP_FB_TOKEN:
         token = text.strip()
-        if len(token) < 20:
+        if not _looks_like_token(token):
             await wa.send_text(
                 sender,
                 "That doesn't look like a valid token.\n\n"
@@ -403,7 +430,7 @@ async def handle_setup_step(
     # --- MANUAL INSTAGRAM TOKEN ENTRY (same as FB — page token covers both) ---
     elif state == ConversationState.SETUP_IG_TOKEN:
         token = text.strip()
-        if len(token) < 20:
+        if not _looks_like_token(token):
             await wa.send_text(
                 sender,
                 "That doesn't look like a valid token. Please paste the full token.",

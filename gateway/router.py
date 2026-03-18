@@ -236,6 +236,13 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
         await handler(db=db, sender=sender, text=text)
         return
 
+    # Check if user pasted a Facebook access token outside of any flow
+    if len(text) > 50 and text.strip().startswith("EAA"):
+        from gateway.handlers.settings import _validate_and_store_manual_token
+        db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
+        await _validate_and_store_manual_token(sender, text.strip(), db)
+        return
+
     await wa.send_text(
         sender,
         "I didn't understand that. Here are the commands you can use:\n\n"
