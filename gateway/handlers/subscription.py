@@ -2,8 +2,7 @@
 Subscription, credit management, and referral handlers.
 
 Plans (Stripe Adaptive Pricing for SGD/MYR auto-conversion):
-  - Free:      30 credits on signup (+50 with referral)
-  - Starter:   $14.99/mo → 500 credits
+  - Free:      100 credits on signup (+50 with referral)
   - Pro:       $34.99/mo → 1,500 credits
   - Business:  $79.99/mo → 5,000 credits
 
@@ -21,7 +20,6 @@ from shared.database import BotDatabase
 from shared.credits import CreditManager, PLANS, CREDIT_PACKS, ACTION_COSTS
 from shared.config import (
     STRIPE_SECRET_KEY,
-    STRIPE_PRICE_ID_STARTER,
     STRIPE_PRICE_ID_PRO,
     STRIPE_PRICE_ID_BUSINESS,
     STRIPE_PRICE_ID_PACK_100,
@@ -42,7 +40,6 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 # Map plan names to Stripe price IDs
 PLAN_PRICE_IDS = {
-    "starter": STRIPE_PRICE_ID_STARTER or STRIPE_PRICE_ID,
     "pro": STRIPE_PRICE_ID_PRO,
     "business": STRIPE_PRICE_ID_BUSINESS,
 }
@@ -110,7 +107,7 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
 
     # Show plan options
     rows = []
-    for key in ("starter", "pro", "business"):
+    for key in ("pro", "business"):
         plan = PLANS[key]
         price_id = PLAN_PRICE_IDS.get(key, "")
         if price_id:
@@ -124,7 +121,6 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
         await wa.send_interactive_list(
             sender,
             "*Choose a Subscription Plan*\n\n"
-            f"*Starter* — ${PLANS['starter']['price_usd']}/mo → {PLANS['starter']['credits']:,} credits\n"
             f"*Pro* — ${PLANS['pro']['price_usd']}/mo → {PLANS['pro']['credits']:,} credits\n"
             f"*Business* — ${PLANS['business']['price_usd']}/mo → {PLANS['business']['credits']:,} credits\n\n"
             "Prices shown in USD. Local currency (SGD/MYR) shown at checkout.\n"

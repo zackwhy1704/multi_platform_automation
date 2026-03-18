@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_customer_id     VARCHAR(255) UNIQUE,
     stripe_subscription_id VARCHAR(255) UNIQUE,
 
-    -- Credits (new users get 30 free credits)
-    credits_remaining      INT DEFAULT 30,
+    -- Credits (new users get 100 free credits)
+    credits_remaining      INT DEFAULT 100,
     credits_used           INT DEFAULT 0,
     credits_reset_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
@@ -132,6 +132,11 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO promo_codes (code, credits_granted, max_uses, active)
 VALUES ('ADMIN99', 999999, NULL, TRUE)
+ON CONFLICT DO NOTHING;
+
+-- First month Pro free: grants 1,500 credits (equivalent to one Pro month)
+INSERT INTO promo_codes (code, credits_granted, max_uses, active)
+VALUES ('FIRSTMONTHFREE', 1500, NULL, TRUE)
 ON CONFLICT DO NOTHING;
 
 -- ============================================================================

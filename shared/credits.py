@@ -10,8 +10,7 @@ Action costs:
   - comment_reply:                  2 credits
 
 Plans:
-  - Free:       30 credits on signup (+50 with referral)
-  - Starter:    $14.99/mo → 500 credits
+  - Free:       100 credits on signup (+50 with referral)
   - Pro:        $34.99/mo → 1,500 credits
   - Business:   $79.99/mo → 5,000 credits
 
@@ -57,8 +56,7 @@ ACTION_COSTS = {
 # Plan definitions
 # ---------------------------------------------------------------------------
 PLANS = {
-    "free": {"name": "Free", "credits": 30, "price_usd": 0},
-    "starter": {"name": "Starter", "credits": 500, "price_usd": 14.99},
+    "free": {"name": "Free", "credits": 100, "price_usd": 0},
     "pro": {"name": "Pro", "credits": 1500, "price_usd": 34.99},
     "business": {"name": "Business", "credits": 5000, "price_usd": 79.99},
 }
