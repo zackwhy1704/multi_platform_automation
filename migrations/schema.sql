@@ -200,3 +200,14 @@ CREATE TABLE IF NOT EXISTS scheduled_content (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_pending ON scheduled_content(status, scheduled_at) WHERE status = 'pending';
+
+-- ============================================================================
+-- WEBHOOK EVENTS (idempotency — prevent processing same Stripe event twice)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS webhook_events (
+    event_id    VARCHAR(255) PRIMARY KEY,
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Auto-cleanup: events older than 30 days can be purged
+CREATE INDEX IF NOT EXISTS idx_webhook_events_date ON webhook_events(processed_at);

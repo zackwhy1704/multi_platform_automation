@@ -30,6 +30,7 @@ from shared.config import (
     STRIPE_PRICE_ID_PACK_5000,
     STRIPE_PRICE_ID,
     PAYMENT_SERVER_URL,
+    PUBLIC_BASE_URL,
     FREE_SIGNUP_CREDITS,
 )
 from gateway.conversation import ConversationState
@@ -210,11 +211,13 @@ async def handle_pack_step(db: BotDatabase, sender: str, text: str,
 async def _create_checkout(sender: str, price_id: str, mode: str, label: str = ""):
     """Create a Stripe Checkout session with Adaptive Pricing enabled."""
     try:
+        # Use PUBLIC_BASE_URL (gateway domain) — payment routes are on the gateway
+        base_url = PUBLIC_BASE_URL or PAYMENT_SERVER_URL
         session_kwargs = {
             "line_items": [{"price": price_id, "quantity": 1}],
             "mode": mode,
-            "success_url": f"{PAYMENT_SERVER_URL}/payment/success",
-            "cancel_url": f"{PAYMENT_SERVER_URL}/payment/cancel",
+            "success_url": f"{base_url}/payment/success",
+            "cancel_url": f"{base_url}/payment/cancel",
             "client_reference_id": sender,
             "metadata": {"phone_number_id": sender, "purchase_type": label},
             "allow_promotion_codes": True,
@@ -258,9 +261,10 @@ async def handle_cancel(db: BotDatabase, sender: str, text: str):
                 "subscription_cancel": {"subscription": sub_id},
             }
 
+        base_url = PUBLIC_BASE_URL or PAYMENT_SERVER_URL
         portal_kwargs = {
             "customer": customer_id,
-            "return_url": f"{PAYMENT_SERVER_URL}/payment/portal-return",
+            "return_url": f"{base_url}/payment/portal-return",
         }
         if flow_data:
             portal_kwargs["flow_data"] = flow_data
