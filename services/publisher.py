@@ -1,208 +1,188 @@
 """
-Direct publisher — posts to Facebook/Instagram via Graph API inline.
+Post For Me publisher — posts to Facebook/Instagram via postforme.dev API.
 
-Facebook posting requires a Page Access Token with:
-  - pages_manage_posts
-  - pages_read_engagement
+No Facebook App Review required. Each customer connects their own social
+accounts through Post For Me's hosted OAuth page, then we store their
+Post For Me profile key and use it to publish on their behalf.
 
-The token stored during setup (OAuth or manual) should already be a
-Page Access Token extracted from /me/accounts.
+Docs: https://api.postforme.dev/docs
 """
 
-import asyncio
 import logging
-
 import httpx
-
+from shared.config import POSTFORME_API_KEY
 from shared.database import BotDatabase
 
 logger = logging.getLogger(__name__)
-GRAPH_API = "https://graph.facebook.com/v21.0"
+
+PFM_BASE = "https://api.postforme.dev/v1"
+PFM_HEADERS = {"Authorization": f"Bearer {POSTFORME_API_KEY}", "Content-Type": "application/json"}
+
+PLATFORM_MAP = {
+    "facebook": "facebook",
+    "instagram": "instagram",
+}
 
 
-async def publish_to_facebook(
-    db: BotDatabase, sender: str, caption: str, media_url: str | None = None
+def _pfm_headers():
+    return {"Authorization": f"Bearer {POSTFORME_API_KEY}", "Content-Type": "application/json"}
+
+
+async def publish_post(
+    db: BotDatabase,
+    sender: str,
+    platform: str,
+    caption: str,
+    media_url: str | None = None,
 ) -> dict:
-    """Post to a Facebook Page via Graph API.
+    """Publish a post via Post For Me API.
 
-    Endpoints:
-    - Text:  POST /{page_id}/feed      → pages_manage_posts
-    - Photo: POST /{page_id}/photos    → pages_manage_posts + pages_read_engagement
-    - Video: POST /{page_id}/videos    → pages_manage_posts + pages_read_engagement
+    Looks up the user's Post For Me profile key stored during setup,
+    then posts to the specified platform.
     """
-    token_data = db.get_platform_token(sender, "facebook")
-    if not token_data or not token_data.get("access_token"):
-        return {"success": False, "error": "No Facebook token. Send *setup* to connect."}
+    token_data = db.get_platform_token(sender, platform)
+    if not token_data:
+        return {
+            "success": False,
+            "error": f"No {platform.title()} account connected. Send *setup* to connect.",
+        }
 
-    access_token = token_data["access_token"]
-    page_id = token_data.get("page_id")
+    pfm_profile_key = token_data.get("pfm_profile_key")
+    if not pfm_profile_key:
+        return {
+            "success": False,
+            "error": (
+                f"Your {platform.title()} account needs to be reconnected via Post For Me.\n\n"
+                "Send *setup* and use the *Connect* link to reconnect."
+            ),
+        }
 
-    if not page_id:
-        return {"success": False, "error": "No Facebook Page ID stored. Send *setup* to reconnect."}
+    if not POSTFORME_API_KEY:
+        return {"success": False, "error": "Post For Me API key not configured. Contact support."}
+
+    # Build post payload
+    payload = {
+        "profileKey": pfm_profile_key,
+        "platforms": [PLATFORM_MAP[platform]],
+        "text": caption,
+    }
+
+    if media_url:
+        is_video = any(media_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi", ".webm"))
+        payload["media"] = [{"url": media_url, "type": "video" if is_video else "image"}]
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            # Build request based on content type
-            if media_url:
-                is_video = any(media_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi"))
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{PFM_BASE}/posts",
+                json=payload,
+                headers=_pfm_headers(),
+            )
 
-                if is_video:
-                    endpoint = f"{GRAPH_API}/{page_id}/videos"
-                    payload = {
-                        "file_url": media_url,
-                        "description": caption,
-                        "access_token": access_token,
-                    }
-                else:
-                    endpoint = f"{GRAPH_API}/{page_id}/photos"
-                    payload = {
-                        "url": media_url,
-                        "message": caption,
-                        "access_token": access_token,
-                    }
-            else:
-                endpoint = f"{GRAPH_API}/{page_id}/feed"
-                payload = {
-                    "message": caption,
-                    "access_token": access_token,
-                }
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
 
-            resp = await client.post(endpoint, data=payload)
+            if resp.status_code in (200, 201):
+                post_id = data.get("id") or data.get("postId", "")
+                db.log_automation_action(sender, platform, "post", 1)
+                logger.info("Post For Me: published %s post for %s: %s", platform, sender, post_id)
+                return {"success": True, "post_id": post_id}
 
-            if resp.status_code != 200:
-                error_data = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
-                fb_error = error_data.get("error", {})
-                error_msg = fb_error.get("message", resp.text[:200])
-                error_code = fb_error.get("code", 0)
-
-                logger.error("Facebook post failed for %s: code=%s msg=%s",
-                             sender, error_code, error_msg)
-
-                return {"success": False, "error": _friendly_fb_error(error_code, error_msg)}
-
-            post_id = resp.json().get("id", resp.json().get("post_id", ""))
-            db.log_automation_action(sender, "facebook", "post", 1)
-            logger.info("Facebook post published for %s: %s", sender, post_id)
-            return {"success": True, "post_id": post_id}
+            error_msg = data.get("message") or data.get("error") or resp.text[:200]
+            logger.error("Post For Me publish failed for %s: %s %s", sender, resp.status_code, error_msg)
+            return {"success": False, "error": _friendly_pfm_error(resp.status_code, error_msg)}
 
     except httpx.TimeoutException:
         return {"success": False, "error": "Request timed out. Please try again."}
     except Exception as e:
-        logger.error("Facebook publish error for %s: %s", sender, e, exc_info=True)
-        return {"success": False, "error": str(e)}
+        logger.error("Post For Me publish error for %s: %s", sender, e, exc_info=True)
+        return {"success": False, "error": "Unexpected error. Please try again."}
 
 
-def _friendly_fb_error(code: int, msg: str) -> str:
-    """Convert Facebook error codes to user-friendly messages."""
+def _friendly_pfm_error(status: int, msg: str) -> str:
+    """Convert Post For Me error responses to user-friendly messages."""
     msg_lower = msg.lower()
 
-    if code == 190 or "expired" in msg_lower:
-        return "Your Facebook token has expired. Send *setup* to reconnect."
+    if status == 401 or "unauthorized" in msg_lower or "api key" in msg_lower:
+        return "Service authentication error. Please contact support."
 
-    if code == 200 or "publish_actions" in msg_lower:
+    if status == 403 or "profile" in msg_lower and "not found" in msg_lower:
         return (
-            "Missing *pages_manage_posts* permission.\n\n"
-            "Send *setup* and use the *OAuth link* (Option 1) to reconnect — "
-            "it automatically requests all required permissions."
+            "Your account connection has expired.\n\n"
+            "Send *setup* and reconnect via the link provided."
         )
 
-    if code == 283 or "pages_read_engagement" in msg_lower:
+    if "media" in msg_lower or "url" in msg_lower:
         return (
-            "Missing *pages_read_engagement* permission.\n\n"
-            "Send *setup* and use the *OAuth link* (Option 1) to reconnect — "
-            "it automatically requests all required permissions."
+            "Could not process the image/video. "
+            "Please try again or use a different image."
         )
 
-    if code == 368 or "temporarily blocked" in msg_lower:
-        return "Facebook has temporarily blocked posting. Try again in a few hours."
-
-    if "url" in msg_lower and ("not accessible" in msg_lower or "could not download" in msg_lower):
-        return (
-            "Facebook couldn't download the image/video. "
-            "The file may have expired. Please try again with a new upload."
-        )
+    if status == 429:
+        return "Too many posts. Please wait a few minutes and try again."
 
     return msg
 
 
-async def publish_to_instagram(
-    db: BotDatabase, sender: str, caption: str, media_url: str | None = None
-) -> dict:
-    """Post to Instagram via Graph API.
+# ---------------------------------------------------------------------------
+# Profile management helpers (called from settings/setup flow)
+# ---------------------------------------------------------------------------
 
-    Flow: create container → poll status → publish.
-    Requires: instagram_basic, instagram_content_publish, pages_read_engagement
+async def create_pfm_profile(user_label: str) -> dict:
+    """Create a new Post For Me profile for a user.
+
+    Returns {"success": True, "profile_key": "...", "connect_url": "..."} or
+            {"success": False, "error": "..."}
     """
-    token_data = db.get_platform_token(sender, "instagram")
-    if not token_data or not token_data.get("access_token"):
-        return {"success": False, "error": "No Instagram token. Send *setup* to connect."}
-
-    access_token = token_data["access_token"]
-    ig_account_id = token_data.get("page_id")
-
-    if not media_url:
-        return {"success": False, "error": "Instagram requires an image or video. Post cancelled."}
-
-    if not ig_account_id:
-        return {"success": False, "error": "No Instagram account ID. Send *setup* to reconnect."}
+    if not POSTFORME_API_KEY:
+        return {"success": False, "error": "POSTFORME_API_KEY not configured"}
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            # Step 1: Create media container
-            is_video = any(media_url.lower().endswith(ext) for ext in (".mp4", ".mov", ".3gp", ".avi"))
-            container_data = {"caption": caption, "access_token": access_token}
-            if is_video:
-                container_data["media_type"] = "VIDEO"
-                container_data["video_url"] = media_url
-            else:
-                container_data["image_url"] = media_url
-
-            resp = await client.post(f"{GRAPH_API}/{ig_account_id}/media", data=container_data)
-            if resp.status_code != 200:
-                error_data = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
-                fb_error = error_data.get("error", {})
-                error_msg = fb_error.get("message", resp.text[:200])
-                error_code = fb_error.get("code", 0)
-                return {"success": False, "error": _friendly_fb_error(error_code, error_msg)}
-
-            creation_id = resp.json().get("id")
-
-            # Step 2: Poll for processing completion
-            max_wait = 60 if is_video else 20
-            poll_interval = 5
-            for _ in range(max_wait // poll_interval):
-                await asyncio.sleep(poll_interval)
-
-                status_resp = await client.get(
-                    f"{GRAPH_API}/{creation_id}",
-                    params={"fields": "status_code", "access_token": access_token},
-                )
-                if status_resp.status_code == 200:
-                    status = status_resp.json().get("status_code")
-                    if status == "FINISHED":
-                        break
-                    elif status == "ERROR":
-                        return {"success": False, "error": "Instagram media processing failed. Try a different image/video."}
-
-            # Step 3: Publish
-            pub_resp = await client.post(
-                f"{GRAPH_API}/{ig_account_id}/media_publish",
-                data={"creation_id": creation_id, "access_token": access_token},
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                f"{PFM_BASE}/profiles",
+                json={"label": user_label},
+                headers=_pfm_headers(),
             )
-            if pub_resp.status_code != 200:
-                error_data = pub_resp.json() if "application/json" in pub_resp.headers.get("content-type", "") else {}
-                fb_error = error_data.get("error", {})
-                error_msg = fb_error.get("message", pub_resp.text[:200])
-                error_code = fb_error.get("code", 0)
-                return {"success": False, "error": _friendly_fb_error(error_code, error_msg)}
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
 
-            media_id = pub_resp.json().get("id", "")
-            db.log_automation_action(sender, "instagram", "post", 1)
-            logger.info("Instagram post published for %s: %s", sender, media_id)
-            return {"success": True, "media_id": media_id}
+            if resp.status_code in (200, 201):
+                profile_key = data.get("key") or data.get("profileKey") or data.get("id", "")
+                connect_url = data.get("connectUrl") or data.get("connect_url") or (
+                    f"https://app.postforme.dev/connect?profileKey={profile_key}" if profile_key else ""
+                )
+                return {"success": True, "profile_key": profile_key, "connect_url": connect_url}
 
-    except httpx.TimeoutException:
-        return {"success": False, "error": "Request timed out. Please try again."}
+            error_msg = data.get("message") or data.get("error") or resp.text[:200]
+            return {"success": False, "error": error_msg}
+
     except Exception as e:
-        logger.error("Instagram publish error for %s: %s", sender, e, exc_info=True)
+        logger.error("create_pfm_profile error: %s", e)
         return {"success": False, "error": str(e)}
+
+
+async def get_pfm_profile_platforms(profile_key: str) -> list[str]:
+    """Return list of platforms the user has connected in Post For Me."""
+    if not POSTFORME_API_KEY or not profile_key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{PFM_BASE}/profiles/{profile_key}",
+                headers=_pfm_headers(),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                accounts = data.get("accounts") or data.get("connectedAccounts") or []
+                return [a.get("platform", "").lower() for a in accounts if a.get("platform")]
+    except Exception as e:
+        logger.warning("get_pfm_profile_platforms error: %s", e)
+    return []
+
+
+# Backwards-compatible wrappers so actions.py imports still work
+async def publish_to_facebook(db: BotDatabase, sender: str, caption: str, media_url: str | None = None) -> dict:
+    return await publish_post(db, sender, "facebook", caption, media_url)
+
+
+async def publish_to_instagram(db: BotDatabase, sender: str, caption: str, media_url: str | None = None) -> dict:
+    return await publish_post(db, sender, "instagram", caption, media_url)

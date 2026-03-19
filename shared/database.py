@@ -176,7 +176,7 @@ class BotDatabase:
 
     def get_platform_token(self, phone_number_id: str, platform: str) -> Optional[Dict]:
         return self.execute_query(
-            "SELECT access_token, page_id, page_name, account_username FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
+            "SELECT access_token, page_id, page_name, account_username, pfm_profile_key FROM platform_tokens WHERE phone_number_id = %s AND platform = %s",
             (phone_number_id, platform), fetch="one",
         )
 
