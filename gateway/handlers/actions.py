@@ -25,6 +25,7 @@ Weekly auto-post flow (STANDALONE — not related to single post):
   5. On approve → schedule posts across the week
 """
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
@@ -317,7 +318,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             profile = db.get_user_profile(sender)
             from services.ai.ai_service import generate_post
             topic = data.get("ai_video_topic")
-            caption = generate_post(platform, profile or {}, topic=topic if topic != "auto" else None)
+            caption = await asyncio.to_thread(generate_post, platform, profile or {}, topic=topic if topic != "auto" else None)
             if not caption:
                 caption = "Watch our latest video!"
         else:
@@ -373,19 +374,21 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
 
             # Generate AI image
             from services.ai.image_generator import generate_image, build_image_prompt
+            from services.ai.ai_service import generate_post
             content_style = profile.get("content_style", "mixed")
             visual_style = profile.get("visual_style", "photorealistic")
             image_prompt = build_image_prompt(profile, content_style, visual_style, topic, platform)
-            image_url = generate_image(image_prompt)
+
+            # Run both blocking calls concurrently in thread pool — keeps event loop free
+            image_url, caption = await asyncio.gather(
+                asyncio.to_thread(generate_image, image_prompt),
+                asyncio.to_thread(generate_post, platform, profile, topic=topic),
+            )
 
             if not image_url:
                 await wa.send_text(sender, "Image generation failed. Please try again or choose a different content type.")
                 db.clear_conversation_state(sender)
                 return
-
-            # Generate caption
-            from services.ai.ai_service import generate_post
-            caption = generate_post(platform, profile, topic=topic)
             if not caption:
                 caption = "Check out our latest creation!"
 
@@ -406,11 +409,14 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
 
             from services.ai.ai_service import generate_post, generate_image_search_query, fetch_stock_image
 
-            caption = generate_post(platform, profile, topic=topic)
+            # Generate caption and search query concurrently (both are blocking Claude calls)
+            caption, search_query = await asyncio.gather(
+                asyncio.to_thread(generate_post, platform, profile, topic=topic),
+                asyncio.to_thread(generate_image_search_query, profile, topic=topic),
+            )
             if not caption:
                 caption = f"Check out what's new! #{'#'.join(profile.get('industry', ['business']))}"
 
-            search_query = generate_image_search_query(profile, topic=topic)
             stock = await fetch_stock_image(search_query)
 
             data["caption"] = caption
@@ -434,7 +440,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             await wa.send_text(sender, "Generating your post...")
             profile = db.get_user_profile(sender)
             from services.ai.ai_service import generate_post
-            caption = generate_post(platform, profile or {}, topic=description)
+            caption = await asyncio.to_thread(generate_post, platform, profile or {}, topic=description)
             if not caption:
                 caption = description  # fallback: use the description itself
 
@@ -453,7 +459,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
                 from gateway.media import is_video
 
                 media_type = "video" if is_video(data.get("media_mime", "")) else "photo"
-                caption = generate_caption_for_media(platform, profile or {}, media_type=media_type)
+                caption = await asyncio.to_thread(generate_caption_for_media, platform, profile or {}, media_type=media_type)
                 if not caption:
                     caption = "Check out our latest update!"
             else:
@@ -478,7 +484,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             await wa.send_text(sender, "Generating post...")
             profile = db.get_user_profile(sender)
             from services.ai.ai_service import generate_post
-            caption = generate_post(platform, profile or {})
+            caption = await asyncio.to_thread(generate_post, platform, profile or {})
             if not caption:
                 caption = "Exciting things happening at our business!"
         else:
@@ -1122,37 +1128,71 @@ async def _generate_batch_posts(profile: dict, platform: str, content_type: str,
     visual_style = profile.get("visual_style", "photorealistic")
     posts = []
 
-    for i in range(count):
-        post = {"index": i}
-
-        # Generate caption with varied topics; use custom_theme as topic if provided
-        topic = custom_theme if custom_theme else None
-        caption = generate_post(platform, profile, topic=topic)
-        post["caption"] = caption or f"Post {i + 1} for the week!"
-
-        if content_type == "stock_image":
-            query = generate_image_search_query(profile, topic=custom_theme)
-            stock = await fetch_stock_image(query)
-            if stock:
-                post["media_url"] = stock["url"]
+    if content_type == "stock_image":
+        # Generate all captions + search queries concurrently, then fetch images
+        topic = custom_theme or None
+        tasks = [
+            asyncio.to_thread(generate_post, platform, profile, topic=topic)
+            for _ in range(count)
+        ]
+        query_tasks = [
+            asyncio.to_thread(generate_image_search_query, profile, topic=custom_theme)
+            for _ in range(count)
+        ]
+        captions, queries = await asyncio.gather(
+            asyncio.gather(*tasks),
+            asyncio.gather(*query_tasks),
+        )
+        stocks = await asyncio.gather(*[fetch_stock_image(q) for q in queries])
+        for i in range(count):
+            post = {"index": i, "caption": captions[i] or f"Post {i + 1} for the week!"}
+            if stocks[i]:
+                post["media_url"] = stocks[i]["url"]
                 post["media_type"] = "Stock photo"
             else:
                 post["media_type"] = "No image found"
+            posts.append(post)
 
-        elif content_type == "ai_image":
-            from services.ai.image_generator import generate_image, build_image_prompt
-            prompt = build_image_prompt(profile, content_style, visual_style, platform=platform)
-            url = generate_image(prompt)
-            if url:
-                post["media_url"] = url
+    elif content_type == "ai_image":
+        from services.ai.image_generator import generate_image, build_image_prompt
+        topic = custom_theme or None
+        caption_tasks = [
+            asyncio.to_thread(generate_post, platform, profile, topic=topic)
+            for _ in range(count)
+        ]
+        image_tasks = [
+            asyncio.to_thread(generate_image, build_image_prompt(profile, content_style, visual_style, platform=platform))
+            for _ in range(count)
+        ]
+        captions, urls = await asyncio.gather(
+            asyncio.gather(*caption_tasks),
+            asyncio.gather(*image_tasks),
+        )
+        for i in range(count):
+            post = {"index": i, "caption": captions[i] or f"Post {i + 1} for the week!"}
+            if urls[i]:
+                post["media_url"] = urls[i]
                 post["media_type"] = "AI image"
             else:
                 post["media_type"] = "Image generation failed"
+            posts.append(post)
 
-        elif content_type == "text_only":
-            post["media_type"] = "Text only"
+    elif content_type == "text_only":
+        topic = custom_theme or None
+        captions = await asyncio.gather(*[
+            asyncio.to_thread(generate_post, platform, profile, topic=topic)
+            for _ in range(count)
+        ])
+        for i in range(count):
+            posts.append({
+                "index": i,
+                "caption": captions[i] or f"Post {i + 1} for the week!",
+                "media_type": "Text only",
+            })
 
-        posts.append(post)
+    else:
+        for i in range(count):
+            posts.append({"index": i, "caption": f"Post {i + 1} for the week!"})
 
     return posts
 
