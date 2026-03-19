@@ -14,8 +14,11 @@ Flow:
   4. publish_post(sender, platform, caption, media_url) uses stored account ID
 """
 
+from __future__ import annotations
+
 import logging
 import httpx
+from typing import Optional
 from shared.config import POSTFORME_API_KEY
 from shared.database import BotDatabase
 
@@ -63,7 +66,7 @@ async def generate_auth_url(sender: str, platform: str = "facebook") -> dict:
         return {"success": False, "error": str(e)}
 
 
-async def get_connected_accounts(sender: str) -> list[dict]:
+async def get_connected_accounts(sender: str) -> list:
     """Return all Post For Me social accounts with external_id matching sender."""
     if not POSTFORME_API_KEY:
         return []
@@ -81,7 +84,7 @@ async def get_connected_accounts(sender: str) -> list[dict]:
     return []
 
 
-async def store_accounts_for_sender(db: BotDatabase, sender: str, accounts: list[dict]):
+async def store_accounts_for_sender(db: BotDatabase, sender: str, accounts: list):
     """Store Post For Me social account IDs in the database for a sender."""
     for acc in accounts:
         platform = acc.get("platform", "").lower()
