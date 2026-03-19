@@ -106,9 +106,10 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
         )
 
     if POSTFORME_API_KEY:
-        pfm_profile_key = await _get_or_create_pfm_profile_key(db, sender)
-        if pfm_profile_key:
-            connect_url = f"https://app.postforme.dev/connect?profileKey={pfm_profile_key}"
+        from services.publisher import generate_auth_url
+        result = await generate_auth_url(sender, "facebook")
+        if result.get("success"):
+            connect_url = result["url"]
             await wa.send_text(
                 sender,
                 f"{status}"
@@ -116,7 +117,7 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
                 f"Tap the link below, log in with Facebook, and select your Page:\n\n"
                 f"{connect_url}\n\n"
                 f"_Works for any Facebook account — no app approval needed._\n\n"
-                f"Once connected, come back here and send *done* to confirm.",
+                f"Once connected, come back and send *done* to confirm.",
             )
             await wa.send_interactive_buttons(
                 sender,
@@ -126,12 +127,9 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
                     {"id": "connect_manually", "title": "Connect Manually"},
                 ],
             )
-            db.set_conversation_state(
-                sender, ConversationState.SETUP_MANUAL_CHOOSE,
-                {"pfm_profile_key": pfm_profile_key},
-            )
+            db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {})
         else:
-            # Profile creation failed — fall back to manual
+            logger.warning("PFM auth URL failed for %s: %s", sender, result.get("error"))
             await _send_manual_token_guide(sender)
             db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
 
@@ -159,50 +157,6 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
         db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
 
 
-async def _get_or_create_pfm_profile_key(db: BotDatabase, sender: str) -> str | None:
-    """Return an existing Post For Me profile key for this user, or create one."""
-    # Check if already stored
-    for platform in ("facebook", "instagram"):
-        token_data = db.get_platform_token(sender, platform)
-        if token_data and token_data.get("pfm_profile_key"):
-            return token_data["pfm_profile_key"]
-
-    # Also check via direct DB query in case token record exists without pfm_profile_key
-    row = db.execute_query(
-        "SELECT pfm_profile_key FROM platform_tokens "
-        "WHERE phone_number_id = %s AND pfm_profile_key IS NOT NULL LIMIT 1",
-        (sender,), fetch="one",
-    )
-    if row and row.get("pfm_profile_key"):
-        return row["pfm_profile_key"]
-
-    # Create a new Post For Me profile
-    from services.publisher import create_pfm_profile
-    result = await create_pfm_profile(f"user_{sender}")
-
-    if not result.get("success"):
-        logger.warning("PFM profile creation failed for %s: %s", sender, result.get("error"))
-        return None
-
-    profile_key = result["profile_key"]
-
-    # Store as placeholder — access_token holds the profile key until FB is connected
-    db.save_platform_token(
-        sender, "facebook", profile_key, "pending",
-        page_name="Pending — connect via link",
-        account_username="",
-    )
-    # Write pfm_profile_key column
-    try:
-        db.execute_query(
-            "UPDATE platform_tokens SET pfm_profile_key = %s "
-            "WHERE phone_number_id = %s AND platform = 'facebook'",
-            (profile_key, sender),
-        )
-    except Exception as e:
-        logger.warning("Could not write pfm_profile_key column: %s", e)
-
-    return profile_key
 
 
 async def _send_manual_token_guide(sender: str):
@@ -473,56 +427,32 @@ async def handle_setup_step(
         pfm_profile_key = data.get("pfm_profile_key", "")
 
         if normalized in ("pfm_done", "done"):
-            # User says they connected — verify via Post For Me API
-            if pfm_profile_key:
-                await wa.send_text(sender, "🔄 Checking your connection...")
-                from services.publisher import get_pfm_profile_platforms
-                import asyncio
-                try:
-                    platforms = await get_pfm_profile_platforms(pfm_profile_key)
-                except Exception:
-                    platforms = []
+            await wa.send_text(sender, "🔄 Checking your connection...")
+            from services.publisher import get_connected_accounts, store_accounts_for_sender
+            accounts = await get_connected_accounts(sender)
+            connected_platforms = [a.get("platform", "").lower() for a in accounts
+                                   if a.get("platform", "").lower() in ("facebook", "instagram")]
 
-                connected = [p for p in platforms if p in ("facebook", "instagram")]
-                if connected:
-                    # Store profile key properly for each connected platform
-                    for platform in connected:
-                        existing = db.get_platform_token(sender, platform)
-                        if existing:
-                            try:
-                                db.execute_query(
-                                    "UPDATE platform_tokens SET pfm_profile_key = %s, "
-                                    "access_token = %s "
-                                    "WHERE user_id = (SELECT id FROM users WHERE phone_number_id = %s) "
-                                    "AND platform = %s",
-                                    (pfm_profile_key, pfm_profile_key, sender, platform),
-                                )
-                            except Exception:
-                                pass
-                        else:
-                            db.save_platform_token(
-                                sender, platform, pfm_profile_key, pfm_profile_key,
-                                page_name="Connected via Post For Me",
-                            )
-
-                    platform_list = " & ".join(p.title() for p in connected)
-                    db.clear_conversation_state(sender)
-                    await wa.send_text(
-                        sender,
-                        f"✅ *{platform_list} connected!*\n\n"
-                        f"You're all set. Send *post* to create your first post!",
-                    )
-                else:
-                    connect_url = f"https://app.postforme.dev/connect?profileKey={pfm_profile_key}"
-                    await wa.send_text(
-                        sender,
-                        "⚠️ No platforms detected yet.\n\n"
-                        f"Make sure you completed the connection on the website:\n{connect_url}\n\n"
-                        "After connecting, tap *Done* again.",
-                    )
-            else:
+            if connected_platforms:
+                await store_accounts_for_sender(db, sender, accounts)
+                platform_list = " & ".join(sorted(set(p.title() for p in connected_platforms)))
                 db.clear_conversation_state(sender)
-                await wa.send_text(sender, "✅ Connection noted. Send *post* to start posting!")
+                await wa.send_text(
+                    sender,
+                    f"✅ *{platform_list} connected!*\n\n"
+                    f"You're all set. Send *post* to create your first post!",
+                )
+            else:
+                # Generate a fresh auth URL so they can try again
+                from services.publisher import generate_auth_url
+                result = await generate_auth_url(sender, "facebook")
+                connect_url = result.get("url", "")
+                await wa.send_text(
+                    sender,
+                    "⚠️ No accounts detected yet.\n\n"
+                    f"Please complete the connection:\n{connect_url}\n\n"
+                    "Make sure to approve all permissions, then tap *Done* again.",
+                )
             return
 
         if normalized == "connect_manually":
@@ -532,12 +462,14 @@ async def handle_setup_step(
             db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
             await _validate_and_store_manual_token(sender, text.strip(), db)
         else:
-            pfm_profile_key = data.get("pfm_profile_key", "")
+            # Re-send a fresh connect URL
+            from services.publisher import generate_auth_url
+            result = await generate_auth_url(sender, "facebook")
+            connect_url = result.get("url", "")
+            if connect_url:
+                await wa.send_text(sender, f"Use this link to connect:\n{connect_url}")
             buttons = [{"id": "pfm_done", "title": "Done — I connected"},
                        {"id": "connect_manually", "title": "Connect Manually"}]
-            if pfm_profile_key:
-                connect_url = f"https://app.postforme.dev/connect?profileKey={pfm_profile_key}"
-                await wa.send_text(sender, f"Use this link to connect:\n{connect_url}")
             await wa.send_interactive_buttons(
                 sender,
                 "After connecting on the website tap Done, or connect manually:",

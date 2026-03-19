@@ -467,6 +467,67 @@ async def oauth_callback(request: Request):
 
 
 # =========================================================================
+# POST FOR ME WEBHOOK — receives social.account.created events
+# =========================================================================
+
+@app.post("/pfm/webhook")
+async def pfm_webhook(request: Request):
+    """Post For Me webhook handler.
+
+    Fires when a user completes OAuth and a social account is created.
+    We use external_id (=sender phone) to map the account back to the user.
+    """
+    try:
+        body = await request.json()
+        event_type = body.get("event_type") or body.get("type", "")
+        data = body.get("data") or body.get("account") or {}
+
+        logger.info("PFM webhook: %s", event_type)
+
+        if event_type == "social.account.created":
+            account_id = data.get("id", "")
+            platform = (data.get("platform") or "").lower()
+            external_id = data.get("external_id") or data.get("externalId") or ""
+            username = data.get("username") or data.get("name") or ""
+
+            if external_id and account_id and platform in ("facebook", "instagram"):
+                db_instance: BotDatabase = app.state.db
+
+                db_instance.save_platform_token(
+                    external_id, platform, account_id, account_id,
+                    page_name=username, account_username=username,
+                )
+                try:
+                    db_instance.execute_query(
+                        "UPDATE platform_tokens SET pfm_profile_key = %s "
+                        "WHERE phone_number_id = %s AND platform = %s",
+                        (account_id, external_id, platform),
+                    )
+                except Exception as e:
+                    logger.warning("pfm_webhook: could not write pfm_profile_key: %s", e)
+
+                db_instance.clear_conversation_state(external_id)
+                await wa.send_text(
+                    external_id,
+                    f"✅ *{platform.title()} connected!*\n\n"
+                    f"Account: *{username or account_id}*\n\n"
+                    "Send *post* to create your first post!",
+                )
+                logger.info("PFM: stored %s account %s for %s", platform, account_id, external_id)
+
+    except Exception as e:
+        logger.error("pfm_webhook error: %s", e, exc_info=True)
+
+    return {"status": "ok"}
+
+
+@app.get("/pfm/webhook")
+async def pfm_webhook_ping():
+    """Respond to Post For Me webhook URL verification ping."""
+    return {"status": "ok"}
+
+
+# =========================================================================
 # MEDIA SERVING
 # =========================================================================
 
