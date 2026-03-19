@@ -163,18 +163,20 @@ async def generate_auth_url(sender: str, platform: str = "facebook") -> dict:
 
 
 async def get_connected_accounts(sender: str) -> list:
-    """Return all Post For Me social accounts with external_id matching sender."""
+    """Return connected Post For Me social accounts with external_id matching sender."""
     if not POSTFORME_API_KEY:
         return []
     try:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.get(
                 f"{PFM_BASE}/social-accounts",
-                params={"external_id": sender, "limit": 10},
+                params={"external_id": sender, "limit": 10, "status": "connected"},
                 headers=_headers(),
             )
             if r.status_code == 200:
-                return r.json().get("data", [])
+                data = r.json().get("data", [])
+                # Filter defensively in case the API ignores the status param
+                return [a for a in data if a.get("status", "connected") == "connected"]
     except Exception as e:
         logger.warning("get_connected_accounts error: %s", e)
     return []
@@ -194,15 +196,8 @@ async def store_accounts_for_sender(db: BotDatabase, sender: str, accounts: list
         db.save_platform_token(
             sender, platform, account_id, account_id,
             page_name=page_name, account_username=username,
+            pfm_profile_key=account_id,
         )
-        try:
-            db.execute_query(
-                "UPDATE platform_tokens SET pfm_profile_key = %s "
-                "WHERE phone_number_id = %s AND platform = %s",
-                (account_id, sender, platform),
-            )
-        except Exception as e:
-            logger.warning("Could not write pfm_profile_key: %s", e)
 
         logger.info("Stored PFM account %s (%s) for %s", account_id, platform, sender)
 
@@ -284,7 +279,10 @@ async def publish_post(
 
             # Poll for result (up to 60s for videos/reels, 30s for images)
             max_wait = 60 if resolved_media_url and _is_video(resolved_media_url) else 30
-            post_url = await _poll_post_result(c, post_id, max_wait)
+            post_url, post_failed = await _poll_post_result(c, post_id, max_wait)
+
+            if post_failed:
+                return {"success": False, "error": "Post was rejected by the platform. Check your account permissions and try again."}
 
             return {"success": True, "post_id": post_id, "url": post_url}
 
@@ -295,8 +293,14 @@ async def publish_post(
         return {"success": False, "error": "Unexpected error. Please try again."}
 
 
-async def _poll_post_result(client: httpx.AsyncClient, post_id: str, max_wait: int = 30) -> Optional[str]:
-    """Poll /v1/social-post-results until published or timeout. Returns post URL or None."""
+async def _poll_post_result(client: httpx.AsyncClient, post_id: str, max_wait: int = 30) -> tuple[Optional[str], bool]:
+    """Poll /v1/social-post-results until published or timeout.
+
+    Returns (post_url, failed):
+      - ("https://...", False) on success
+      - (None, False) on timeout (still processing)
+      - (None, True) on explicit platform failure
+    """
     interval = 5
     elapsed = 0
     while elapsed < max_wait:
@@ -315,22 +319,24 @@ async def _poll_post_result(client: httpx.AsyncClient, post_id: str, max_wait: i
                     pd = result.get("platform_data") or {}
                     url = pd.get("url") or pd.get("id") or ""
                     logger.info("PFM post %s published: %s", post_id, url)
-                    return url
+                    return url, False
                 elif result.get("success") is False:
                     err = result.get("error")
-                    logger.warning("PFM post %s failed: %s", post_id, err)
-                    return None
+                    logger.warning("PFM post %s failed at platform level: %s", post_id, err)
+                    return None, True
         except Exception as e:
             logger.warning("poll_post_result error: %s", e)
 
     logger.info("PFM post %s still processing after %ds", post_id, max_wait)
-    return None
+    return None, False
 
 
 def _friendly_error(status: int, msg: str) -> str:
     msg_lower = msg.lower()
-    if status == 401 or "unauthorized" in msg_lower:
+    if status in (401, 403) or "unauthorized" in msg_lower or "forbidden" in msg_lower:
         return "Service authentication error. Contact support."
+    if status == 404 or "not found" in msg_lower:
+        return "Your account connection could not be found. Send *setup* to reconnect."
     if "not owned by user" in msg_lower or (status == 400 and "invalid social accounts" in msg_lower):
         return "Your account connection has expired. Send *setup* to reconnect."
     if "media" in msg_lower or "url" in msg_lower:

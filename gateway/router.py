@@ -24,7 +24,7 @@ COMMANDS = {
     "start": onboarding.handle_start,
     "help": onboarding.handle_help,
     "post": actions.handle_post,
-    "auto": actions.handle_auto,
+    "weekly": actions.handle_auto,
     "schedule": actions.handle_schedule,
     "reply": actions.handle_reply,
     "stats": actions.handle_stats,
@@ -55,11 +55,8 @@ STATE_HANDLERS = {
     ConversationState.SETUP_MANUAL_CHOOSE: settings.handle_setup_step,
     # Actions — posting flow
     ConversationState.AWAITING_POST_PLATFORM: actions.handle_post_step,
-    ConversationState.AWAITING_POST_TYPE: actions.handle_post_step,
     ConversationState.AWAITING_POST_MEDIA: actions.handle_post_step,
     ConversationState.AWAITING_POST_CAPTION: actions.handle_post_step,
-    ConversationState.AWAITING_AI_VIDEO_TOPIC: actions.handle_post_step,
-    ConversationState.AWAITING_AI_VIDEO_CAPTION: actions.handle_post_step,
     ConversationState.AWAITING_POST_CONFIRM: actions.handle_post_step,
     ConversationState.AWAITING_POST_CONTENT: actions.handle_post_step,
     ConversationState.AWAITING_SCHEDULE_TIME: actions.handle_post_step,
@@ -239,38 +236,53 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
             )
             return
 
-        # Save media and ask which platform
+        # Step 1: Upload media directly to WhatsApp so it renders instantly in the chat.
+        from gateway.media import is_video as _is_video, get_media_public_url
+        from shared.config import PUBLIC_BASE_URL
+        is_vid = _is_video(media_info["mime_type"])
+        media_type = "video" if is_vid else "photo"
+        file_path = media_info.get("file_path", "")
+        mime = media_info["mime_type"]
+
+        if is_vid:
+            sent = await wa.send_video(sender, "", file_path=file_path, mime_type=mime)
+        else:
+            sent = await wa.send_image(sender, "", file_path=file_path, mime_type=mime)
+
+        if not sent and PUBLIC_BASE_URL:
+            preview_url = get_media_public_url(media_info["filename"], PUBLIC_BASE_URL)
+            sent = await wa.send_video(sender, preview_url) if is_vid else await wa.send_image(sender, preview_url)
+
         data = {
             "media_filename": media_info["filename"],
             "media_mime": media_info["mime_type"],
             "post_type": "own_media",
         }
 
+        # Step 2: If both platforms are connected, we need platform selection first.
+        # User taps platform button → that confirms they saw the preview → then caption.
         if fb_token and ig_token:
             db.set_conversation_state(sender, ConversationState.AWAITING_POST_PLATFORM, data)
             await wa.send_interactive_buttons(
                 sender,
-                "Got your media! Which platform should I post it on?",
+                f"Your {media_type} is ready! Which platform do you want to post it on?",
                 [
                     {"id": "facebook", "title": "Facebook"},
                     {"id": "instagram", "title": "Instagram"},
                 ],
             )
-        elif fb_token:
-            data["platform"] = "facebook"
-            db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
-            await wa.send_text(
-                sender,
-                "Got your media! Write a *caption* for your Facebook post.\n\n"
-                "Or type *ai* to generate one automatically.",
-            )
         else:
-            data["platform"] = "instagram"
+            # Single platform — caption choice buttons confirm they saw the preview.
+            data["platform"] = "facebook" if fb_token else "instagram"
+            platform_label = "Facebook" if fb_token else "Instagram"
             db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
-            await wa.send_text(
+            await wa.send_interactive_buttons(
                 sender,
-                "Got your media! Write a *caption* for your Instagram post.\n\n"
-                "Or type *ai* to generate one automatically.",
+                f"Your {media_type} is ready for {platform_label}! How would you like to add a caption?",
+                [
+                    {"id": "ai", "title": "Generate with AI"},
+                    {"id": "write_caption", "title": "Write My Own"},
+                ],
             )
         return
 
@@ -298,7 +310,7 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         sender,
         "I didn't understand that. Here are the commands you can use:\n\n"
         "*post* — Create a post (photo/video/text)\n"
-        "*auto* — Auto-generate posts for the week\n"
+        "*weekly* — Auto-generate posts for the week\n"
         "*schedule* — Schedule a post\n"
         "*reply* — Auto-reply to comments\n"
         "*stats* — View your stats\n"

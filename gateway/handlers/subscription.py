@@ -2,9 +2,9 @@
 Subscription, credit management, and referral handlers.
 
 Plans (Stripe Adaptive Pricing for SGD/MYR auto-conversion):
-  - Free:      100 credits on signup (+50 with referral)
-  - Pro:       $34.99/mo → 1,500 credits
-  - Business:  $79.99/mo → 5,000 credits
+  - Free:      30 credits on signup (+30 with referral)
+  - Pro:       $34.99/mo → 500 credits
+  - Business:  $79.99/mo → 1,500 credits
 
 Add-on credit packs (one-time):
   - 100 credits:   $4.99
@@ -73,16 +73,13 @@ async def handle_credits(db: BotDatabase, sender: str, text: str):
         f"Used this period: {summary['credits_used']}\n\n"
         f"*Credit Costs:*\n"
         f"  Text post: {ACTION_COSTS['text_post']} credits\n"
-        f"  Stock image post: {ACTION_COSTS['stock_image_post']} credits\n"
-        f"  Own media post: {ACTION_COSTS['own_media_post']} credits\n"
-        f"  AI image post: {ACTION_COSTS['ai_image_post']} credits\n"
-        f"  AI video post: {ACTION_COSTS['ai_video_post']} credits\n"
+        f"  Photo/Video post: {ACTION_COSTS['own_media_post']} credits\n"
         f"  Comment reply: {ACTION_COSTS['comment_reply']} credits\n\n"
         + ("Credits reset on your next billing cycle." if is_sub else
            "Want more credits?\n"
            f"  *subscribe* — Monthly plans from ${PLANS['pro']['price_usd']}\n"
            "  *buy* — One-time credit packs from $4.99\n"
-           "  *referral* — Earn 50 credits per friend"),
+           "  *referral* — Earn 30 credits per friend"),
     )
 
 
@@ -298,12 +295,12 @@ async def handle_referral(db: BotDatabase, sender: str, text: str):
         f"*Your Referral Program*\n\n"
         f"Your code: *{referral_code}*\n"
         f"Successful referrals: {referral_count}\n"
-        f"Credits earned from referrals: {referral_count * 50}\n\n"
+        f"Credits earned from referrals: {referral_count * 30}\n\n"
         f"*How it works:*\n"
         f"1. Share your code with friends\n"
         f"2. They enter it during signup\n"
-        f"3. You both get *50 bonus credits*!\n\n"
+        f"3. You both get *30 bonus credits*!\n\n"
         f"Share this message:\n"
-        f"_Try the AI Automation Service for your social media! "
-        f"Use my code {referral_code} when you sign up and we both get 50 free credits._",
+        f"_Try the AI Social Media Automation Service! "
+        f"Use my code {referral_code} when you sign up and we both get 30 free credits._",
     )

@@ -5,20 +5,18 @@ Action costs:
   - text_post / scheduled_text:     3 credits
   - stock_image_post:               5 credits
   - own_media_post:                 5 credits
-  - ai_image_post:                 30 credits  (uses gpt-image-1)
-  - ai_video_post:                100 credits  (uses Kling AI)
   - comment_reply:                  2 credits
 
 Plans:
-  - Free:       FREE_SIGNUP_CREDITS on signup (+50 with referral code)
-  - Pro:        $34.99/mo → 1,500 credits
-  - Business:   $79.99/mo → 5,000 credits
+  - Free:       FREE_SIGNUP_CREDITS on signup (+30 with referral code)
+  - Pro:        $34.99/mo → 500 credits
+  - Business:   $79.99/mo → 1,500 credits
 
 Add-on packs:
   - 100 credits:   $4.99
   - 500 credits:   $24.99
   - 1,500 credits: $74.99
-  - 5,000 credits: $200.00 (Enterprise)
+  - 5,000 credits: $200.00
 """
 
 import logging
@@ -39,12 +37,6 @@ ACTION_COSTS = {
     # User's own media + AI caption
     "own_media_post": 5,
     "scheduled_own_media": 5,
-    # AI-generated image (gpt-image-1) + caption
-    "ai_image_post": 30,
-    "scheduled_ai_image": 30,
-    # AI-generated video (Kling AI) + caption
-    "ai_video_post": 100,
-    "scheduled_ai_video": 100,
     # Comment auto-reply
     "comment_reply": 2,
     # Legacy (backwards compat)
@@ -57,8 +49,8 @@ ACTION_COSTS = {
 # ---------------------------------------------------------------------------
 PLANS = {
     "free": {"name": "Free", "credits": FREE_SIGNUP_CREDITS, "price_usd": 0},
-    "pro": {"name": "Pro", "credits": 1500, "price_usd": 34.99},
-    "business": {"name": "Business", "credits": 5000, "price_usd": 79.99},
+    "pro": {"name": "Pro", "credits": 500, "price_usd": 34.99},
+    "business": {"name": "Business", "credits": 1500, "price_usd": 79.99},
 }
 
 # ---------------------------------------------------------------------------
@@ -82,8 +74,6 @@ def get_action_label(action: str) -> str:
         "text_post": "Text post",
         "stock_image_post": "Stock image post",
         "own_media_post": "Own media post",
-        "ai_image_post": "AI image post",
-        "ai_video_post": "AI video post",
         "comment_reply": "Comment reply",
     }
     return labels.get(action, action.replace("_", " ").title())

@@ -292,6 +292,16 @@ async def handle_setup_step(
             connect_url = result.get("url", "")
             if connect_url:
                 await wa.send_text(sender, f"Use this link to connect:\n{connect_url}")
+            else:
+                from shared.config import PUBLIC_BASE_URL
+                fix_url = f"{PUBLIC_BASE_URL}/connect/{sender}" if PUBLIC_BASE_URL else ""
+                await wa.send_text(
+                    sender,
+                    "⚠️ Could not generate a connection link right now.\n\n"
+                    "Please try sending *setup* again in a moment."
+                    + (f"\n\nOr open this link: {fix_url}" if fix_url else ""),
+                )
+                return
             await wa.send_interactive_buttons(
                 sender,
                 "After connecting on the website, tap Done:",

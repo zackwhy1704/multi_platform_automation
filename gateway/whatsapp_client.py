@@ -80,27 +80,84 @@ async def send_interactive_list(to: str, body: str, button_text: str, sections: 
     return await _post(payload)
 
 
-async def send_image(to: str, image_url: str, caption: str = "") -> bool:
-    """Send an image message via URL."""
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "image",
-        "image": {"link": image_url},
-    }
+async def upload_media(file_path: str, mime_type: str) -> Optional[str]:
+    """Upload a local file to WhatsApp Media API. Returns media_id or None.
+
+    Uploaded media IDs are valid for 30 days and render instantly (no URL fetch lag).
+    """
+    from shared.config import WHATSAPP_PHONE_NUMBER_ID as _phone_id
+    from shared.config import WHATSAPP_TOKEN as _token
+    import os
+
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{_phone_id}/media"
+    headers = {"Authorization": f"Bearer {_token.strip()}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            with open(file_path, "rb") as f:
+                files = {"file": (os.path.basename(file_path), f, mime_type)}
+                data = {"messaging_product": "whatsapp", "type": mime_type}
+                resp = await client.post(url, headers=headers, files=files, data=data)
+
+            if resp.status_code == 200:
+                media_id = resp.json().get("id")
+                logger.info("Uploaded media to WhatsApp: %s", media_id)
+                return media_id
+
+            logger.error("WhatsApp media upload failed %s: %s", resp.status_code, resp.text[:200])
+            return None
+    except Exception as e:
+        logger.error("upload_media error: %s", e)
+        return None
+
+
+async def send_image(to: str, image_url: str, caption: str = "",
+                     file_path: str = "", mime_type: str = "") -> bool:
+    """Send an image. Prefers direct upload (file_path) over URL for instant rendering."""
+    media_id = None
+    if file_path and mime_type:
+        media_id = await upload_media(file_path, mime_type)
+
+    if media_id:
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "image",
+            "image": {"id": media_id},
+        }
+    else:
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "image",
+            "image": {"link": image_url},
+        }
     if caption:
         payload["image"]["caption"] = caption[:1024]
     return await _post(payload)
 
 
-async def send_video(to: str, video_url: str, caption: str = "") -> bool:
-    """Send a video message via URL."""
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "video",
-        "video": {"link": video_url},
-    }
+async def send_video(to: str, video_url: str, caption: str = "",
+                     file_path: str = "", mime_type: str = "") -> bool:
+    """Send a video. Prefers direct upload (file_path) over URL for instant rendering."""
+    media_id = None
+    if file_path and mime_type:
+        media_id = await upload_media(file_path, mime_type)
+
+    if media_id:
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "video",
+            "video": {"id": media_id},
+        }
+    else:
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "video",
+            "video": {"link": video_url},
+        }
     if caption:
         payload["video"]["caption"] = caption[:1024]
     return await _post(payload)

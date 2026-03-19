@@ -155,19 +155,21 @@ class BotDatabase:
     # =========================================================================
 
     def save_platform_token(self, phone_number_id: str, platform: str, access_token: str,
-                            page_id: str = None, page_name: str = None, account_username: str = None) -> bool:
+                            page_id: str = None, page_name: str = None, account_username: str = None,
+                            pfm_profile_key: str = None) -> bool:
         try:
             self.create_user(phone_number_id)
             self.execute_query(
-                """INSERT INTO platform_tokens (phone_number_id, platform, access_token, page_id, page_name, account_username)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                """INSERT INTO platform_tokens (phone_number_id, platform, access_token, page_id, page_name, account_username, pfm_profile_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone_number_id, platform) DO UPDATE SET
                     access_token = EXCLUDED.access_token,
                     page_id = COALESCE(EXCLUDED.page_id, platform_tokens.page_id),
                     page_name = COALESCE(EXCLUDED.page_name, platform_tokens.page_name),
                     account_username = COALESCE(EXCLUDED.account_username, platform_tokens.account_username),
+                    pfm_profile_key = COALESCE(EXCLUDED.pfm_profile_key, platform_tokens.pfm_profile_key),
                     updated_at = CURRENT_TIMESTAMP""",
-                (phone_number_id, platform, access_token, page_id, page_name, account_username),
+                (phone_number_id, platform, access_token, page_id, page_name, account_username, pfm_profile_key),
             )
             return True
         except Exception as e:

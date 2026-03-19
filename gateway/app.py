@@ -500,7 +500,22 @@ async def pfm_webhook(request: Request):
 
         logger.info("PFM webhook: %s", event_type)
 
-        if event_type == "social.account.created":
+        if event_type == "social.account.disconnected":
+            account_id = data.get("id", "")
+            platform = (data.get("platform") or "").lower()
+            external_id = data.get("external_id") or data.get("externalId") or ""
+
+            if external_id and account_id and platform in ("facebook", "instagram"):
+                db_instance: BotDatabase = app.state.db
+                db_instance.delete_platform_token(external_id, platform)
+                logger.info("PFM: cleared disconnected %s account %s for %s", platform, account_id, external_id)
+                await wa.send_text(
+                    external_id,
+                    f"⚠️ Your *{platform.title()}* account was disconnected.\n\n"
+                    "Send *setup* to reconnect.",
+                )
+
+        elif event_type == "social.account.created":
             account_id = data.get("id", "")
             platform = (data.get("platform") or "").lower()
             external_id = data.get("external_id") or data.get("externalId") or ""
@@ -512,15 +527,8 @@ async def pfm_webhook(request: Request):
                 db_instance.save_platform_token(
                     external_id, platform, account_id, account_id,
                     page_name=username, account_username=username,
+                    pfm_profile_key=account_id,
                 )
-                try:
-                    db_instance.execute_query(
-                        "UPDATE platform_tokens SET pfm_profile_key = %s "
-                        "WHERE phone_number_id = %s AND platform = %s",
-                        (account_id, external_id, platform),
-                    )
-                except Exception as e:
-                    logger.warning("pfm_webhook: could not write pfm_profile_key: %s", e)
 
                 db_instance.clear_conversation_state(external_id)
                 await wa.send_text(
@@ -675,6 +683,29 @@ async def portal_return(request: Request):
 # =========================================================================
 # STRIPE WEBHOOK — single source of truth for payment events
 # =========================================================================
+
+def _get_plan_credits(subscription) -> int:
+    """Determine how many credits to grant based on the Stripe price ID on the subscription."""
+    from shared.credits import PLANS
+    from shared.config import STRIPE_PRICE_ID_PRO, STRIPE_PRICE_ID_BUSINESS
+    try:
+        items = getattr(subscription, "items", None)
+        if items is None and isinstance(subscription, dict):
+            items = subscription.get("items", {})
+        item_list = getattr(items, "data", []) if hasattr(items, "data") else (items.get("data", []) if isinstance(items, dict) else [])
+        if item_list:
+            price_id = getattr(item_list[0], "price", None)
+            if price_id is None:
+                price_id = item_list[0].get("price", {}) if isinstance(item_list[0], dict) else None
+            pid = getattr(price_id, "id", None) or (price_id.get("id") if isinstance(price_id, dict) else None)
+            if pid == STRIPE_PRICE_ID_BUSINESS:
+                return PLANS["business"]["credits"]
+            if pid == STRIPE_PRICE_ID_PRO:
+                return PLANS["pro"]["credits"]
+    except Exception:
+        pass
+    return PLANS["pro"]["credits"]  # default to pro (500)
+
 
 def _get_subscription_period_end(subscription) -> int | None:
     """Get current_period_end from Stripe subscription (handles old + new API)."""
@@ -880,9 +911,10 @@ async def _handle_subscription_updated(subscription):
                 "Send *subscribe* to resubscribe anytime.",
             )
         elif status == "active":
+            plan_credits = _get_plan_credits(subscription)
             cm = CreditManager(db)
-            cm.reset_credits(phone, MONTHLY_CREDITS)
-            await _notify_whatsapp(phone, f"Subscription renewed! Credits reset to *{MONTHLY_CREDITS}*.")
+            cm.reset_credits(phone, plan_credits)
+            await _notify_whatsapp(phone, f"Subscription renewed! Credits reset to *{plan_credits}*.")
 
     except Exception as e:
         logger.error("Error in subscription.updated: %s", e, exc_info=True)
@@ -947,9 +979,10 @@ async def _handle_invoice_paid(invoice):
             return
 
         phone = user["phone_number_id"]
+        plan_credits = _get_plan_credits(invoice)
         cm = CreditManager(db)
-        cm.reset_credits(phone, MONTHLY_CREDITS)
-        logger.info("Credits reset for %s on invoice.paid", phone)
+        cm.reset_credits(phone, plan_credits)
+        logger.info("Credits reset for %s on invoice.paid (%d credits)", phone, plan_credits)
 
     except Exception as e:
         logger.error("Error in invoice.paid: %s", e, exc_info=True)

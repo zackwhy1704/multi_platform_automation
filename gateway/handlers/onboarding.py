@@ -486,8 +486,8 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
         sender,
         "*Available Commands*\n\n"
         "📝 *Content*\n"
-        f"  post — Create a post ({ACTION_COSTS['text_post']}–{ACTION_COSTS['ai_video_post']} credits)\n"
-        "  auto — Auto-generate a week of posts\n"
+        f"  post — Create a post ({ACTION_COSTS['text_post']}–{ACTION_COSTS['own_media_post']} credits)\n"
+        "  weekly — Auto-generate a week of posts\n"
         "  schedule — Schedule a post for later\n"
         f"  reply — Auto-reply to comments ({ACTION_COSTS['comment_reply']} credits)\n\n"
         "💳 *Credits & Plans*\n"
@@ -704,14 +704,14 @@ async def handle_promo_step(
             await wa.send_text(sender, "You've already used a referral code. Type *skip* to continue.")
             return
 
-        db.grant_credits(sender, 50, reason="referral_bonus")
-        db.grant_credits(referrer["phone_number_id"], 50, reason="referral_reward")
+        db.grant_credits(sender, 30, reason="referral_bonus")
+        db.grant_credits(referrer["phone_number_id"], 30, reason="referral_reward")
         db.record_referral(referrer["phone_number_id"], sender)
         db.set_referred_by(sender, referrer["phone_number_id"])
-        await wa.send_text(referrer["phone_number_id"], "Someone used your referral code! You earned *50 bonus credits*.")
+        await wa.send_text(referrer["phone_number_id"], "Someone used your referral code! You earned *30 bonus credits*.")
 
         db.clear_conversation_state(sender)
-        await wa.send_text(sender, "✅ Referral code applied! *50 bonus credits* added.")
+        await wa.send_text(sender, "✅ Referral code applied! *30 bonus credits* added.")
         await _send_onboarding_complete(db, sender)
         return
 
@@ -749,11 +749,9 @@ async def _send_onboarding_complete(db: BotDatabase, sender: str):
         "2️⃣  Send *post* — create your first AI post\n"
         "3️⃣  Send *subscribe* — view plans for more credits\n\n"
         "*Credit costs:*\n"
-        f"  Text: {ACTION_COSTS['text_post']} | Stock image: {ACTION_COSTS['stock_image_post']}\n"
-        f"  AI image: {ACTION_COSTS['ai_image_post']} | AI video: {ACTION_COSTS['ai_video_post']}\n"
-        f"  Comment reply: {ACTION_COSTS['comment_reply']}\n\n"
+        f"  Photo/Video post: {ACTION_COSTS['own_media_post']} | Text post: {ACTION_COSTS['text_post']} | Comment reply: {ACTION_COSTS['comment_reply']}\n\n"
         f"🎁 Your referral code: *{referral_code}*\n"
-        "Share it — you both get *50 bonus credits*!\n\n"
+        "Share it — you both get *30 bonus credits*!\n\n"
         "_Send_ *help* _anytime for all commands._",
     )
     await wa.send_interactive_buttons(
