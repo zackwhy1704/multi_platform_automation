@@ -146,11 +146,12 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
             f"Tap the link below, log in with Facebook, and select your Page:\n\n"
             f"{connect_url}\n\n"
             f"_Works for any Facebook account — no app approval needed._\n\n"
-            f"Once connected, come back and send *done* to confirm.",
+            f"You'll receive an automatic confirmation here once connected.\n"
+            f"Or tap *Done* below to check manually.",
         )
         await wa.send_interactive_buttons(
             sender,
-            "After connecting on the website, tap Done:",
+            "Connected? Tap Done to verify:",
             [{"id": "pfm_done", "title": "Done — I connected"}],
         )
         db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {})

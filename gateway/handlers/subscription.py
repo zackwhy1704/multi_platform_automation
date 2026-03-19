@@ -260,7 +260,7 @@ async def handle_cancel(db: BotDatabase, sender: str, text: str):
         base_url = PUBLIC_BASE_URL or PAYMENT_SERVER_URL
         portal_kwargs = {
             "customer": customer_id,
-            "return_url": f"{base_url}/payment/portal-return",
+            "return_url": f"{base_url}/payment/portal-return?phone={sender}",
         }
         if flow_data:
             portal_kwargs["flow_data"] = flow_data

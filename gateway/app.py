@@ -560,79 +560,116 @@ async def serve_media(filename: str):
 # PAYMENT REDIRECT PAGES (Stripe Checkout redirects here)
 # =========================================================================
 
-def _wa_btn(label: str = "Return to WhatsApp") -> str:
-    href = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
-    return (
-        f'<a href="{href}" style="display:inline-block;margin-top:24px;padding:14px 28px;'
-        f'background:#25D366;color:#fff;text-decoration:none;border-radius:8px;'
-        f'font-size:16px;font-weight:600;">&#x21A9; {label}</a>'
-    )
-
-
-_SUCCESS_HTML = f"""<!DOCTYPE html>
-<html><head><title>Payment Successful</title>
+def _return_page(
+    title: str,
+    icon: str,
+    heading: str,
+    body: str,
+    bg: str,
+    text_color: str,
+    wa_url: str,
+    btn_label: str = "Back to WhatsApp",
+    redirect_seconds: int = 5,
+) -> str:
+    """Generate a return page with auto-redirect countdown and WhatsApp deep link."""
+    return f"""<!DOCTYPE html>
+<html><head>
+<title>{title}</title>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#f0fdf4;color:#166534;padding:20px;text-align:center}}
-.card{{padding:40px;max-width:400px}}
-h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
-</style></head>
-<body><div class="card">
-<h1>&#10003;</h1>
-<p><strong>Payment successful!</strong></p>
-<p>Your subscription is being activated. You'll receive a confirmation message in WhatsApp shortly.</p>
-{_wa_btn("Back to WhatsApp")}
-</div></body></html>"""
-
-_CANCEL_HTML = f"""<!DOCTYPE html>
-<html><head><title>Payment Cancelled</title>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#fefce8;color:#854d0e;padding:20px;text-align:center}}
-.card{{padding:40px;max-width:400px}}
-h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
-</style></head>
-<body><div class="card">
-<h1>&#8592;</h1>
-<p>Payment cancelled. No charges were made.</p>
-<p>Send <strong>subscribe</strong> in WhatsApp to try again.</p>
-{_wa_btn("Back to WhatsApp")}
-</div></body></html>"""
-
-_PORTAL_RETURN_HTML = f"""<!DOCTYPE html>
-<html><head><title>Subscription Updated</title>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;background:#eff6ff;color:#1e40af;padding:20px;text-align:center}}
-.card{{padding:40px;max-width:400px}}
-h1{{font-size:48px;margin:0}}p{{font-size:18px;line-height:1.6}}
-</style></head>
-<body><div class="card">
-<h1>&#10003;</h1>
-<p>Subscription updated.</p>
-{_wa_btn("Back to WhatsApp")}
-</div></body></html>"""
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+     display:flex;justify-content:center;align-items:center;
+     min-height:100vh;background:{bg};color:{text_color};padding:20px;text-align:center}}
+.card{{max-width:420px;width:100%}}
+.icon{{font-size:56px;margin-bottom:16px}}
+h1{{font-size:24px;font-weight:700;margin-bottom:12px}}
+p{{font-size:16px;line-height:1.7;opacity:.85;margin-bottom:8px}}
+.wa-btn{{display:inline-block;margin-top:24px;padding:15px 32px;background:#25D366;
+         color:#fff;text-decoration:none;border-radius:10px;font-size:16px;font-weight:600}}
+.countdown{{margin-top:16px;font-size:13px;opacity:.6}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">{icon}</div>
+  <h1>{heading}</h1>
+  {body}
+  <a href="{wa_url}" class="wa-btn">&#x21A9; {btn_label}</a>
+  <p class="countdown" id="cd">Returning to WhatsApp in <span id="n">{redirect_seconds}</span>s…</p>
+</div>
+<script>
+var t={redirect_seconds}, wa="{wa_url}";
+var iv=setInterval(function(){{
+  t--;
+  var el=document.getElementById('n');
+  if(el) el.textContent=t;
+  if(t<=0){{clearInterval(iv);window.location.href=wa;}}
+}},1000);
+</script>
+</body></html>"""
 
 
 @app.get("/payment/success", response_class=HTMLResponse)
-async def payment_success():
-    """Redirect page after Stripe Checkout. Activation happens via webhook."""
-    return HTMLResponse(_SUCCESS_HTML)
+async def payment_success(request: Request):
+    """Redirect page after Stripe Checkout. Activation happens via Stripe webhook."""
+    wa_base = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
+    # Pre-fill "credits" so user sees their new balance when they land back
+    wa_url = f"{wa_base}?text=credits"
+    return HTMLResponse(_return_page(
+        title="Payment Successful",
+        icon="✅",
+        heading="Payment successful!",
+        body="<p>Your account is being activated.</p><p>You'll receive a confirmation in WhatsApp — check your credits there.</p>",
+        bg="#f0fdf4", text_color="#166534",
+        wa_url=wa_url,
+        btn_label="Back to WhatsApp",
+    ))
 
 
 @app.get("/payment/cancel", response_class=HTMLResponse)
-async def payment_cancel():
-    """Redirect page when user cancels Stripe Checkout."""
-    return HTMLResponse(_CANCEL_HTML)
+async def payment_cancel(request: Request):
+    """Redirect page when user abandons Stripe Checkout."""
+    wa_base = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
+    # Pre-fill "buy" so they land back ready to try again
+    wa_url = f"{wa_base}?text=buy"
+    return HTMLResponse(_return_page(
+        title="Payment Cancelled",
+        icon="↩",
+        heading="Payment cancelled",
+        body="<p>No charges were made.</p><p>Tap below to go back and try again.</p>",
+        bg="#fefce8", text_color="#854d0e",
+        wa_url=wa_url,
+        btn_label="Back to WhatsApp",
+    ))
 
 
 @app.get("/payment/portal-return", response_class=HTMLResponse)
-async def portal_return():
-    """Return page after Stripe Customer Portal."""
-    return HTMLResponse(_PORTAL_RETURN_HTML)
+async def portal_return(request: Request):
+    """Return page after Stripe Customer Portal. Sends WA follow-up if phone is known."""
+    phone = request.query_params.get("phone", "")
+    wa_base = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
+    wa_url = f"{wa_base}?text=credits"
+
+    if phone:
+        try:
+            await wa.send_text(
+                phone,
+                "You're back from the subscription portal.\n\n"
+                "Send *credits* to check your current balance, or *subscribe* to manage your plan.",
+            )
+        except Exception as e:
+            logger.warning("portal-return WA notify failed for %s: %s", phone, e)
+
+    return HTMLResponse(_return_page(
+        title="Subscription Updated",
+        icon="✅",
+        heading="All done!",
+        body="<p>Your subscription changes have been saved.</p><p>Return to WhatsApp to check your balance.</p>",
+        bg="#eff6ff", text_color="#1e40af",
+        wa_url=wa_url,
+        btn_label="Back to WhatsApp",
+    ))
 
 
 # =========================================================================
@@ -972,8 +1009,8 @@ h1{{font-size:22px;font-weight:700;color:#0f172a;margin-bottom:8px}}
     4. Return here &amp; go back to WhatsApp<br>
     5. Send <strong>done</strong> in chat
   </div>
-  <a href="{wa_url}" class="btn btn-wa">&#x21A9; Back to WhatsApp</a>
-  <p class="note">If you're still stuck, send <strong>reset</strong> in WhatsApp to clear your session.</p>
+  <a href="{wa_url}?text=done" class="btn btn-wa">&#x21A9; Back to WhatsApp</a>
+  <p class="note">Tapping the button above sends <strong>done</strong> to the bot automatically so it verifies your connection.<br>If you're still stuck, send <strong>reset</strong> in WhatsApp.</p>
 </div>
 </body></html>"""
     return HTMLResponse(html)
