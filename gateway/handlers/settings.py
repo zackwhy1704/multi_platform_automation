@@ -106,8 +106,7 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
         )
 
     if POSTFORME_API_KEY:
-        # Create a Post For Me profile for this user (idempotent — reuse if exists)
-        pfm_profile_key = _get_or_create_pfm_profile_key(db, sender)
+        pfm_profile_key = await _get_or_create_pfm_profile_key(db, sender)
         if pfm_profile_key:
             connect_url = f"https://app.postforme.dev/connect?profileKey={pfm_profile_key}"
             await wa.send_text(
@@ -160,57 +159,50 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
         db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
 
 
-def _get_or_create_pfm_profile_key(db: BotDatabase, sender: str) -> str | None:
-    """Return an existing Post For Me profile key for this user, or create one.
-
-    We store the profile key in the facebook token record (pfm_profile_key field),
-    or fall back to creating a new profile via the API synchronously.
-    """
-    # Check if already stored in either platform token
+async def _get_or_create_pfm_profile_key(db: BotDatabase, sender: str) -> str | None:
+    """Return an existing Post For Me profile key for this user, or create one."""
+    # Check if already stored
     for platform in ("facebook", "instagram"):
         token_data = db.get_platform_token(sender, platform)
         if token_data and token_data.get("pfm_profile_key"):
             return token_data["pfm_profile_key"]
 
-    # Create a new profile synchronously
-    import asyncio
+    # Also check via direct DB query in case token record exists without pfm_profile_key
+    row = db.execute_query(
+        "SELECT pfm_profile_key FROM platform_tokens "
+        "WHERE phone_number_id = %s AND pfm_profile_key IS NOT NULL LIMIT 1",
+        (sender,), fetch="one",
+    )
+    if row and row.get("pfm_profile_key"):
+        return row["pfm_profile_key"]
+
+    # Create a new Post For Me profile
     from services.publisher import create_pfm_profile
+    result = await create_pfm_profile(f"user_{sender}")
 
+    if not result.get("success"):
+        logger.warning("PFM profile creation failed for %s: %s", sender, result.get("error"))
+        return None
+
+    profile_key = result["profile_key"]
+
+    # Store as placeholder — access_token holds the profile key until FB is connected
+    db.save_platform_token(
+        sender, "facebook", profile_key, "pending",
+        page_name="Pending — connect via link",
+        account_username="",
+    )
+    # Write pfm_profile_key column
     try:
-        loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(create_pfm_profile(f"user_{sender}"))
-    except RuntimeError:
-        # Already inside an event loop — use a thread
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, create_pfm_profile(f"user_{sender}"))
-            result = future.result(timeout=20)
-
-    if result.get("success"):
-        profile_key = result["profile_key"]
-        # Store the profile key in DB — save as a placeholder token record
-        # so we can look it up later. The actual access_token field is left empty
-        # until the user completes connection on the PFM site.
-        db.save_platform_token(
-            sender, "facebook", "__pfm__", "__pending__",
-            page_name="Pending connection",
-            account_username="",
+        db.execute_query(
+            "UPDATE platform_tokens SET pfm_profile_key = %s "
+            "WHERE phone_number_id = %s AND platform = 'facebook'",
+            (profile_key, sender),
         )
-        # Update extra metadata — store profile key in the token record
-        try:
-            db.execute_query(
-                "UPDATE platform_tokens SET pfm_profile_key = %s "
-                "WHERE user_id = (SELECT id FROM users WHERE phone_number_id = %s) "
-                "AND platform = 'facebook'",
-                (profile_key, sender),
-            )
-        except Exception as e:
-            logger.warning("Could not store pfm_profile_key in DB (column may not exist): %s", e)
-            # Store in token JSON as fallback — return key anyway
-        return profile_key
+    except Exception as e:
+        logger.warning("Could not write pfm_profile_key column: %s", e)
 
-    logger.warning("Post For Me profile creation failed for %s: %s", sender, result.get("error"))
-    return None
+    return profile_key
 
 
 async def _send_manual_token_guide(sender: str):
