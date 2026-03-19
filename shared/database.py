@@ -420,7 +420,7 @@ class BotDatabase:
     # =========================================================================
 
     def get_conversation_state(self, phone_number_id: str) -> Optional[Dict]:
-        return self.execute_query("SELECT state, data FROM conversation_state WHERE phone_number_id = %s", (phone_number_id,), fetch="one")
+        return self.execute_query("SELECT state, data, updated_at FROM conversation_state WHERE phone_number_id = %s", (phone_number_id,), fetch="one")
 
     def set_conversation_state(self, phone_number_id: str, state: str, data: dict = None):
         self.execute_query(

@@ -1,15 +1,24 @@
 """
 Message router — dispatches incoming WhatsApp messages to the right handler.
 Supports text, interactive (buttons/lists), and media (image/video) messages.
+
+Self-healing guarantees:
+- All handler exceptions are caught; user always gets a recovery message
+- Conversation states older than STALE_STATE_MINUTES are auto-cleared
+- "reset" command clears any stuck state instantly
 """
 
 import logging
+from datetime import datetime, timezone
 from shared.database import BotDatabase
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
 from gateway.handlers import onboarding, actions, subscription, settings
 
 logger = logging.getLogger(__name__)
+
+# Auto-clear stuck states after this many minutes of inactivity
+STALE_STATE_MINUTES = 30
 
 COMMANDS = {
     "start": onboarding.handle_start,
@@ -27,6 +36,7 @@ COMMANDS = {
     "disconnect": settings.handle_disconnect,
     "settings": settings.handle_settings,
     "referral": subscription.handle_referral,
+    "reset": settings.handle_reset,
 }
 
 STATE_HANDLERS = {
@@ -73,6 +83,26 @@ MEDIA_ACCEPTING_STATES = {
 
 
 async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, contact_name: str):
+    try:
+        await _route_message(db, sender, message, contact_name)
+    except Exception as e:
+        logger.error("Unhandled exception for %s: %s", sender, e, exc_info=True)
+        try:
+            db.clear_conversation_state(sender)
+        except Exception:
+            pass
+        from shared.config import PUBLIC_BASE_URL, WHATSAPP_BOT_PHONE
+        fix_url = f"{PUBLIC_BASE_URL}/connect/{sender}" if PUBLIC_BASE_URL else ""
+        fix_line = f"\n\nOr visit: {fix_url}" if fix_url else ""
+        await wa.send_text(
+            sender,
+            "Something went wrong on our end. Your session has been reset.\n\n"
+            "Send *help* to see available commands, or *reset* to start fresh."
+            f"{fix_line}",
+        )
+
+
+async def _route_message(db: BotDatabase, sender: str, message: dict, contact_name: str):
     msg_type = message.get("type", "")
     msg_id = message.get("id", "")
 
@@ -119,6 +149,24 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
 
     # Check conversation state first
     conv = db.get_conversation_state(sender)
+
+    # Auto-clear stale states (stuck for > STALE_STATE_MINUTES)
+    if conv and conv["state"] != ConversationState.IDLE:
+        updated_at = conv.get("updated_at")
+        if updated_at:
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            age_minutes = (datetime.now(timezone.utc) - updated_at).total_seconds() / 60
+            if age_minutes > STALE_STATE_MINUTES:
+                logger.info("Auto-clearing stale state %s for %s (age: %.0fm)", conv["state"], sender, age_minutes)
+                db.clear_conversation_state(sender)
+                conv = None
+                await wa.send_text(
+                    sender,
+                    "Your previous session timed out and has been reset.\n\n"
+                    "Send *help* to see available commands.",
+                )
+
     if conv and conv["state"] != ConversationState.IDLE:
         state = ConversationState(conv["state"])
 

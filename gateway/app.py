@@ -918,6 +918,67 @@ async def _handle_invoice_paid(invoice):
         logger.error("Error in invoice.paid: %s", e, exc_info=True)
 
 
+@app.get("/connect/{phone_id}", response_class=HTMLResponse)
+async def connect_fallback(phone_id: str):
+    """Fallback connection page — generates a fresh PFM OAuth link for stuck users."""
+    from services.publisher import generate_auth_url
+    wa_url = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "https://wa.me/"
+
+    result = await generate_auth_url(phone_id, "facebook")
+    connect_url = result.get("url", "") if result.get("success") else ""
+
+    if connect_url:
+        connect_section = f"""
+      <p class="subtitle">Tap the button below to connect your Facebook Page and Instagram account.</p>
+      <a href="{connect_url}" class="btn btn-primary">Connect with Facebook</a>
+      <p class="note">After connecting, return to WhatsApp and send <strong>done</strong> to confirm.</p>"""
+    else:
+        connect_section = """
+      <p class="subtitle error">Could not generate a connection link right now. Please return to WhatsApp and try <strong>setup</strong> again in a moment.</p>"""
+
+    html = f"""<!DOCTYPE html>
+<html><head>
+<title>Connect Your Account</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;
+     min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}}
+.card{{background:#fff;border-radius:16px;padding:36px 28px;max-width:420px;width:100%;
+      box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center}}
+h1{{font-size:22px;font-weight:700;color:#0f172a;margin-bottom:8px}}
+.subtitle{{color:#475569;font-size:15px;line-height:1.6;margin-bottom:24px}}
+.error{{color:#dc2626}}
+.btn{{display:block;padding:15px 20px;border-radius:10px;font-size:16px;font-weight:600;
+     text-decoration:none;margin-bottom:12px}}
+.btn-primary{{background:#1877F2;color:#fff}}
+.btn-primary:hover{{background:#1664d8}}
+.btn-wa{{background:#25D366;color:#fff;margin-top:8px}}
+.note{{font-size:13px;color:#64748b;margin-top:16px;line-height:1.6}}
+.steps{{text-align:left;background:#f8fafc;border-radius:10px;padding:16px;margin:20px 0;font-size:14px;color:#334155;line-height:2}}
+.steps strong{{color:#1877F2}}
+.divider{{border:none;border-top:1px solid #e2e8f0;margin:24px 0}}
+</style>
+</head><body>
+<div class="card">
+  <h1>Connect Facebook &amp; Instagram</h1>
+  {connect_section}
+  <hr class="divider">
+  <div class="steps">
+    <strong>Steps:</strong><br>
+    1. Tap "Connect with Facebook"<br>
+    2. Log in &amp; select your Page<br>
+    3. Approve all permissions<br>
+    4. Return here &amp; go back to WhatsApp<br>
+    5. Send <strong>done</strong> in chat
+  </div>
+  <a href="{wa_url}" class="btn btn-wa">&#x21A9; Back to WhatsApp</a>
+  <p class="note">If you're still stuck, send <strong>reset</strong> in WhatsApp to clear your session.</p>
+</div>
+</body></html>"""
+    return HTMLResponse(html)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "gateway"}

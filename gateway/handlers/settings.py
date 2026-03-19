@@ -73,6 +73,32 @@ async def handle_settings(db: BotDatabase, sender: str, text: str):
     await wa.send_text(sender, "\n".join(lines))
 
 
+async def handle_reset(db: BotDatabase, sender: str, text: str):
+    """Clear any stuck conversation state and give the user a clean slate."""
+    db.clear_conversation_state(sender)
+    from shared.config import PUBLIC_BASE_URL, WHATSAPP_BOT_PHONE
+    fix_url = f"{PUBLIC_BASE_URL}/connect/{sender}" if PUBLIC_BASE_URL else ""
+
+    fb_token = db.get_platform_token(sender, "facebook")
+    ig_token = db.get_platform_token(sender, "instagram")
+
+    lines = ["✅ *Session reset.* You're back to a clean state.\n"]
+    if fb_token or ig_token:
+        fb = _account_label(fb_token, "facebook") if fb_token else "Not connected"
+        ig = _account_label(ig_token, "instagram") if ig_token else "Not connected"
+        lines.append(f"*Connected accounts:*")
+        lines.append(f"  Facebook: {fb}")
+        lines.append(f"  Instagram: {ig}")
+        lines.append("")
+        lines.append("Send *post* to create a post, or *help* for all commands.")
+    else:
+        lines.append("No accounts connected yet. Send *setup* to connect Facebook or Instagram.")
+        if fix_url:
+            lines.append(f"\nOr open: {fix_url}")
+
+    await wa.send_text(sender, "\n".join(lines))
+
+
 async def handle_setup(db: BotDatabase, sender: str, text: str):
     """Start platform connection via Post For Me OAuth."""
     fb_token = db.get_platform_token(sender, "facebook")
@@ -89,7 +115,27 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
             f"Tap below to *switch account* or reconnect.\n\n"
         )
 
-    from services.publisher import generate_auth_url
+    from services.publisher import generate_auth_url, get_connected_accounts
+
+    # If already connected, verify the stored key is still valid
+    if fb_token:
+        pfm_key = fb_token.get("pfm_profile_key") or fb_token.get("access_token", "")
+        if pfm_key and pfm_key not in ("pending", "__pfm__"):
+            accounts = await get_connected_accounts(sender)
+            live_ids = {a.get("id") for a in accounts}
+            if pfm_key not in live_ids:
+                # Key exists in DB but not in PFM — clear it and reconnect
+                logger.warning("Stale PFM key for %s — clearing and reconnecting", sender)
+                db.delete_platform_token(sender, "facebook")
+                db.delete_platform_token(sender, "instagram")
+                fb_token = None
+                ig_token = None
+                status = ""
+                await wa.send_text(
+                    sender,
+                    "⚠️ Your previous connection has expired. Let's reconnect now.\n",
+                )
+
     result = await generate_auth_url(sender, "facebook")
     if result.get("success"):
         connect_url = result["url"]
@@ -110,10 +156,14 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
         db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {})
     else:
         logger.error("PFM auth URL failed for %s: %s", sender, result.get("error"))
+        from shared.config import PUBLIC_BASE_URL
+        fix_url = f"{PUBLIC_BASE_URL}/connect/{sender}" if PUBLIC_BASE_URL else ""
+        fix_line = f"\n\nOr try opening this link directly:\n{fix_url}" if fix_url else ""
         await wa.send_text(
             sender,
-            "⚠️ Could not generate a connection link right now.\n\n"
-            "Please try again in a moment, or contact support.",
+            f"⚠️ Could not generate a connection link right now.\n\n"
+            f"Please try again in a moment, or send *reset* to clear your session."
+            f"{fix_line}",
         )
 
 
@@ -190,8 +240,18 @@ async def handle_setup_step(
 
         if normalized in ("pfm_done", "done"):
             await wa.send_text(sender, "🔄 Checking your connection...")
+            import asyncio as _asyncio
             from services.publisher import get_connected_accounts, store_accounts_for_sender
-            accounts = await get_connected_accounts(sender)
+
+            # Retry up to 3 times with short delays (PFM may take a moment to sync)
+            accounts = []
+            for attempt in range(3):
+                accounts = await get_connected_accounts(sender)
+                if accounts:
+                    break
+                if attempt < 2:
+                    await _asyncio.sleep(3)
+
             connected_platforms = [
                 a.get("platform", "").lower() for a in accounts
                 if a.get("platform", "").lower() in ("facebook", "instagram")
@@ -208,13 +268,21 @@ async def handle_setup_step(
                 )
             else:
                 from services.publisher import generate_auth_url
+                from shared.config import PUBLIC_BASE_URL
                 result = await generate_auth_url(sender, "facebook")
                 connect_url = result.get("url", "")
+                fix_url = f"{PUBLIC_BASE_URL}/connect/{sender}" if PUBLIC_BASE_URL else ""
+                fix_line = f"\n\nIf your chat is stuck, open: {fix_url}" if fix_url else ""
                 await wa.send_text(
                     sender,
-                    "⚠️ No accounts detected yet.\n\n"
-                    f"Please complete the connection:\n{connect_url}\n\n"
-                    "Make sure to approve all permissions, then tap *Done* again.",
+                    "⚠️ *No accounts detected yet.*\n\n"
+                    "Please complete the steps on the website — make sure to:\n"
+                    "1. Log in with Facebook\n"
+                    "2. Select your Page\n"
+                    "3. Approve *all* permissions\n\n"
+                    f"Connection link:\n{connect_url}\n\n"
+                    f"Then tap *Done* again once finished."
+                    f"{fix_line}",
                 )
         else:
             # Re-send a fresh connect URL
