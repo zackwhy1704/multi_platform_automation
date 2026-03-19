@@ -32,14 +32,18 @@ class ConversationState(str, Enum):
     AWAITING_POST_TYPE = "awaiting_post_type"          # own media, AI image, AI video, text-only
     AWAITING_POST_MEDIA = "awaiting_post_media"        # waiting for user to send photo/video
     AWAITING_POST_CAPTION = "awaiting_post_caption"    # write caption or type "ai"
+    AWAITING_AI_VIDEO_TOPIC = "awaiting_ai_video_topic"    # AI video: waiting for topic
+    AWAITING_AI_VIDEO_CAPTION = "awaiting_ai_video_caption"  # AI video: waiting for caption after video sent
     AWAITING_POST_CONFIRM = "awaiting_post_confirm"    # preview → approve/edit/cancel
     AWAITING_POST_CONTENT = "awaiting_post_content"    # text-only content
     AWAITING_SCHEDULE_TIME = "awaiting_schedule_time"
 
     # Weekly auto-post
     AWAITING_AUTO_PLATFORM = "awaiting_auto_platform"
-    AWAITING_AUTO_COUNT = "awaiting_auto_count"        # how many posts (3/5/7)
+    AWAITING_AUTO_COUNT = "awaiting_auto_count"        # how many posts (3/5/7/others)
+    AWAITING_AUTO_COUNT_CUSTOM = "awaiting_auto_count_custom"  # user types custom number
     AWAITING_AUTO_TYPE = "awaiting_auto_type"          # content type for batch
+    AWAITING_AUTO_TYPE_CUSTOM = "awaiting_auto_type_custom"    # user types custom content type
     AWAITING_AUTO_CONFIRM = "awaiting_auto_confirm"    # approve all / edit / cancel
 
     # Engagement

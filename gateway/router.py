@@ -50,13 +50,17 @@ STATE_HANDLERS = {
     ConversationState.AWAITING_POST_TYPE: actions.handle_post_step,
     ConversationState.AWAITING_POST_MEDIA: actions.handle_post_step,
     ConversationState.AWAITING_POST_CAPTION: actions.handle_post_step,
+    ConversationState.AWAITING_AI_VIDEO_TOPIC: actions.handle_post_step,
+    ConversationState.AWAITING_AI_VIDEO_CAPTION: actions.handle_post_step,
     ConversationState.AWAITING_POST_CONFIRM: actions.handle_post_step,
     ConversationState.AWAITING_POST_CONTENT: actions.handle_post_step,
     ConversationState.AWAITING_SCHEDULE_TIME: actions.handle_post_step,
     # Weekly auto-post
     ConversationState.AWAITING_AUTO_PLATFORM: actions.handle_auto_step,
     ConversationState.AWAITING_AUTO_COUNT: actions.handle_auto_step,
+    ConversationState.AWAITING_AUTO_COUNT_CUSTOM: actions.handle_auto_step,
     ConversationState.AWAITING_AUTO_TYPE: actions.handle_auto_step,
+    ConversationState.AWAITING_AUTO_TYPE_CUSTOM: actions.handle_auto_step,
     ConversationState.AWAITING_AUTO_CONFIRM: actions.handle_auto_step,
     # Engagement
     ConversationState.AWAITING_REPLY_PLATFORM: actions.handle_reply_step,
