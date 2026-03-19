@@ -10,7 +10,7 @@ Action costs:
   - comment_reply:                  2 credits
 
 Plans:
-  - Free:       100 credits on signup (+50 with referral)
+  - Free:       FREE_SIGNUP_CREDITS on signup (+50 with referral code)
   - Pro:        $34.99/mo → 1,500 credits
   - Business:   $79.99/mo → 5,000 credits
 
@@ -22,7 +22,7 @@ Add-on packs:
 """
 
 import logging
-from shared.config import MONTHLY_CREDITS
+from shared.config import MONTHLY_CREDITS, FREE_SIGNUP_CREDITS
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ ACTION_COSTS = {
 # Plan definitions
 # ---------------------------------------------------------------------------
 PLANS = {
-    "free": {"name": "Free", "credits": 100, "price_usd": 0},
+    "free": {"name": "Free", "credits": FREE_SIGNUP_CREDITS, "price_usd": 0},
     "pro": {"name": "Pro", "credits": 1500, "price_usd": 34.99},
     "business": {"name": "Business", "credits": 5000, "price_usd": 79.99},
 }

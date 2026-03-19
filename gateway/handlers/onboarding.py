@@ -494,15 +494,16 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
         "  credits — Check balance\n"
         "  buy — Buy credit packs\n"
         "  subscribe — View subscription plans\n"
-        "  cancel — Cancel subscription\n\n"
+        "  cancel — Manage / cancel subscription\n\n"
         "⚙️ *Account*\n"
         "  setup — Connect Facebook / Instagram\n"
         "  settings — View / update profile\n"
         "  disconnect — Switch account\n"
         "  referral — Get referral code\n"
-        "  stats — View your stats\n\n"
+        "  stats — View your stats\n"
+        "  reset — Exit any current flow\n\n"
         "📷 *Quick post:* Just send a photo or video!\n\n"
-        "_Send_ *cancel* _at any time to exit a flow._",
+        "_Send_ *reset* _at any time to exit a flow._",
     )
 
 

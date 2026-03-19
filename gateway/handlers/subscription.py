@@ -80,7 +80,7 @@ async def handle_credits(db: BotDatabase, sender: str, text: str):
         f"  Comment reply: {ACTION_COSTS['comment_reply']} credits\n\n"
         + ("Credits reset on your next billing cycle." if is_sub else
            "Want more credits?\n"
-           "  *subscribe* — Monthly plans from $14.99\n"
+           f"  *subscribe* — Monthly plans from ${PLANS['pro']['price_usd']}\n"
            "  *buy* — One-time credit packs from $4.99\n"
            "  *referral* — Earn 50 credits per friend"),
     )

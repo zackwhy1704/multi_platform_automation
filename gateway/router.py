@@ -171,9 +171,9 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         state = ConversationState(conv["state"])
 
         # Cancel command works in any state
-        if text.lower() in ("cancel", "exit", "quit"):
+        if text.lower() in ("exit", "quit"):
             db.clear_conversation_state(sender)
-            await wa.send_text(sender, "Cancelled. Send *help* to see available commands.")
+            await wa.send_text(sender, "Exited current flow. Send *help* to see available commands.")
             return
 
         # If user types a known command while in a flow, auto-cancel and run it
@@ -199,7 +199,7 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
                 await wa.send_text(
                     sender,
                     "Please send a *photo or video* for your post.\n"
-                    "Or type *cancel* to go back.",
+                    "Or type *reset* to exit.",
                 )
                 return
             elif text or media_info:
@@ -209,7 +209,7 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
                     await wa.send_text(
                         sender,
                         "I received your media but I'm not expecting it right now.\n"
-                        "Type *cancel* to start over, or continue with the current step.",
+                        "Type *reset* to start over, or continue with the current step.",
                     )
                     return
                 await handler(

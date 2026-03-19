@@ -340,7 +340,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             await wa.send_text(
                 sender,
                 "Please send a *photo or video* — I'm waiting for your media.\n\n"
-                "Or type *cancel* to go back.",
+                "Or type *reset* to exit.",
             )
             return
 
