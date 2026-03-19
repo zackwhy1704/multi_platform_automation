@@ -21,11 +21,9 @@ class ConversationState(str, Enum):
     # Promo / referral code entry
     AWAITING_PROMO_CODE = "awaiting_promo_code"
 
-    # Platform setup (OAuth flow + manual token fallback)
+    # Platform setup (Post For Me OAuth flow)
     SETUP_PLATFORM = "setup_platform"
-    SETUP_MANUAL_CHOOSE = "setup_manual_choose"   # shown OAuth URL, waiting for "Connect Manually"
-    SETUP_FB_TOKEN = "setup_fb_token"
-    SETUP_IG_TOKEN = "setup_ig_token"
+    SETUP_MANUAL_CHOOSE = "setup_manual_choose"   # shown OAuth URL, waiting for "Done"
 
     # Content creation — media-aware flow
     AWAITING_POST_PLATFORM = "awaiting_post_platform"

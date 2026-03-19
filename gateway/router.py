@@ -43,8 +43,6 @@ STATE_HANDLERS = {
     # Platform setup
     ConversationState.SETUP_PLATFORM: settings.handle_setup_step,
     ConversationState.SETUP_MANUAL_CHOOSE: settings.handle_setup_step,
-    ConversationState.SETUP_FB_TOKEN: settings.handle_setup_step,
-    ConversationState.SETUP_IG_TOKEN: settings.handle_setup_step,
     # Actions — posting flow
     ConversationState.AWAITING_POST_PLATFORM: actions.handle_post_step,
     ConversationState.AWAITING_POST_TYPE: actions.handle_post_step,
@@ -246,13 +244,6 @@ async def handle_incoming_message(db: BotDatabase, sender: str, message: dict, c
     handler = COMMANDS.get(command_word)
     if handler:
         await handler(db=db, sender=sender, text=text)
-        return
-
-    # Check if user pasted a Facebook access token outside of any flow
-    if len(text) > 50 and text.strip().startswith("EAA"):
-        from gateway.handlers.settings import _validate_and_store_manual_token
-        db.set_conversation_state(sender, ConversationState.SETUP_FB_TOKEN, {})
-        await _validate_and_store_manual_token(sender, text.strip(), db)
         return
 
     await wa.send_text(
