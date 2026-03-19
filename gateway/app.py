@@ -153,6 +153,271 @@ async def oauth_debug():
     }
 
 
+@app.get("/auth/connect/{phone_id}")
+async def connect_page(phone_id: str):
+    """Self-service Facebook Login page using JS SDK.
+
+    This bypasses the server-side OAuth flow entirely. The user logs in
+    client-side, grants permissions, and we extract the Page Access Token
+    via JS SDK — then POST it back to our server to store.
+    """
+    wa_url = f"https://wa.me/{WHATSAPP_BOT_PHONE}" if WHATSAPP_BOT_PHONE else "#"
+    html = f"""<!DOCTYPE html>
+<html><head>
+<title>Connect Facebook</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{{font-family:-apple-system,sans-serif;margin:0;padding:20px;background:#f8f9fa;
+     display:flex;justify-content:center;align-items:center;min-height:100vh}}
+.card{{background:#fff;border-radius:12px;padding:32px;max-width:420px;width:100%;
+      box-shadow:0 2px 12px rgba(0,0,0,.1);text-align:center}}
+h2{{margin:0 0 8px;color:#1a1a1a}}
+.subtitle{{color:#666;margin-bottom:24px;font-size:14px}}
+.btn{{display:inline-block;padding:14px 28px;border-radius:8px;font-size:16px;
+     font-weight:600;text-decoration:none;border:none;cursor:pointer;width:100%;box-sizing:border-box}}
+.btn-fb{{background:#1877F2;color:#fff;margin-bottom:12px}}
+.btn-fb:hover{{background:#166FE5}}
+.btn-wa{{background:#25D366;color:#fff;margin-top:16px}}
+.btn-disabled{{background:#ccc;cursor:not-allowed}}
+#status{{margin:16px 0;padding:12px;border-radius:8px;display:none;font-size:14px;text-align:left}}
+.status-ok{{background:#f0fdf4;color:#166534;display:block!important}}
+.status-err{{background:#fef2f2;color:#991b1b;display:block!important}}
+.status-wait{{background:#eff6ff;color:#1e40af;display:block!important}}
+.perms{{text-align:left;margin:16px 0;padding:12px;background:#f8f9fa;border-radius:8px;font-size:13px}}
+.perms li{{margin:4px 0}}
+</style>
+</head><body>
+<div class="card">
+  <h2>Connect Your Facebook Page</h2>
+  <p class="subtitle">Log in with Facebook to grant posting permissions</p>
+
+  <div class="perms">
+    <strong>Permissions requested:</strong>
+    <ul>
+      <li>Manage and publish posts to your Page</li>
+      <li>Read Page engagement (for stats)</li>
+      <li>Access linked Instagram account</li>
+    </ul>
+  </div>
+
+  <button id="loginBtn" class="btn btn-fb" onclick="doLogin()">
+    Log in with Facebook
+  </button>
+
+  <div id="status"></div>
+
+  <a href="{wa_url}" id="waBtn" class="btn btn-wa" style="display:none">
+    ↩ Back to WhatsApp
+  </a>
+</div>
+
+<script>
+const PHONE_ID = "{phone_id}";
+const APP_ID = "{FB_APP_ID}";
+const BASE_URL = "{PUBLIC_BASE_URL}";
+
+// Load Facebook SDK
+window.fbAsyncInit = function() {{
+  FB.init({{
+    appId: APP_ID,
+    cookie: true,
+    xfbml: false,
+    version: 'v21.0'
+  }});
+}};
+(function(d, s, id) {{
+  var js, fjs = d.getElementsByTagName(s)[0];
+  if (d.getElementById(id)) return;
+  js = d.createElement(s); js.id = id;
+  js.src = "https://connect.facebook.net/en_US/sdk.js";
+  fjs.parentNode.insertBefore(js, fjs);
+}}(document, 'script', 'facebook-jssdk'));
+
+function setStatus(msg, cls) {{
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status-' + cls;
+}}
+
+function showWaBtn() {{
+  document.getElementById('waBtn').style.display = 'inline-block';
+}}
+
+async function doLogin() {{
+  const btn = document.getElementById('loginBtn');
+  btn.classList.add('btn-disabled');
+  btn.textContent = 'Connecting...';
+  setStatus('Opening Facebook Login...', 'wait');
+
+  FB.login(function(response) {{
+    if (response.authResponse) {{
+      const userToken = response.authResponse.accessToken;
+      setStatus('Logged in! Fetching your Pages...', 'wait');
+      fetchPages(userToken);
+    }} else {{
+      setStatus('Login cancelled or not fully authorized. Please try again and grant all permissions.', 'err');
+      btn.classList.remove('btn-disabled');
+      btn.textContent = 'Log in with Facebook';
+    }}
+  }}, {{
+    scope: 'pages_manage_posts,pages_read_engagement,pages_show_list,instagram_basic,instagram_content_publish,public_profile',
+    auth_type: 'rerequest'
+  }});
+}}
+
+function fetchPages(userToken) {{
+  FB.api('/me/accounts', {{
+    fields: 'id,name,access_token,instagram_business_account',
+    access_token: userToken
+  }}, function(resp) {{
+    if (resp.error) {{
+      setStatus('Error fetching pages: ' + resp.error.message, 'err');
+      showWaBtn();
+      return;
+    }}
+    if (!resp.data || resp.data.length === 0) {{
+      setStatus('No Facebook Pages found. You need a Facebook Page to use this bot. Create one at facebook.com.', 'err');
+      showWaBtn();
+      return;
+    }}
+
+    const page = resp.data[0];
+    const pageToken = page.access_token;
+    const pageId = page.id;
+    const pageName = page.name;
+    const igAccount = page.instagram_business_account ? page.instagram_business_account.id : null;
+
+    setStatus('Found page: ' + pageName + '. Saving...', 'wait');
+    saveToken(pageToken, pageId, pageName, igAccount, userToken);
+  }});
+}}
+
+async function saveToken(pageToken, pageId, pageName, igAccount, userToken) {{
+  try {{
+    // Exchange for long-lived token server-side, then store
+    const resp = await fetch(BASE_URL + '/auth/store-token', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{
+        phone_id: PHONE_ID,
+        page_token: pageToken,
+        page_id: pageId,
+        page_name: pageName,
+        ig_account_id: igAccount,
+        user_token: userToken
+      }})
+    }});
+
+    const result = await resp.json();
+    if (result.success) {{
+      setStatus('✅ Connected! Page: ' + pageName +
+        (result.ig_connected ? ' | Instagram: connected' : '') +
+        '\\n\\nYou will receive a confirmation in WhatsApp.', 'ok');
+    }} else {{
+      setStatus('Error: ' + (result.error || 'Unknown error'), 'err');
+    }}
+  }} catch(e) {{
+    setStatus('Network error: ' + e.message, 'err');
+  }}
+  showWaBtn();
+}}
+</script>
+</body></html>"""
+    return HTMLResponse(html)
+
+
+@app.post("/auth/store-token")
+async def store_token(request: Request):
+    """Receive Page Access Token from the JS SDK login flow and store it."""
+    import httpx as _httpx
+
+    try:
+        body = await request.json()
+        phone_id = body.get("phone_id", "")
+        page_token = body.get("page_token", "")
+        page_id = body.get("page_id", "")
+        page_name = body.get("page_name", "")
+        ig_account_id = body.get("ig_account_id")
+        user_token = body.get("user_token", "")
+
+        if not phone_id or not page_token or not page_id:
+            return {"success": False, "error": "Missing required fields"}
+
+        db: BotDatabase = app.state.db
+
+        # Exchange user token for long-lived, then get permanent page token
+        final_page_token = page_token
+        if user_token and FB_APP_ID:
+            from shared.config import FB_APP_SECRET
+            try:
+                async with _httpx.AsyncClient(timeout=15) as client:
+                    ll_resp = await client.get(
+                        "https://graph.facebook.com/v21.0/oauth/access_token",
+                        params={
+                            "grant_type": "fb_exchange_token",
+                            "client_id": FB_APP_ID,
+                            "client_secret": FB_APP_SECRET,
+                            "fb_exchange_token": user_token,
+                        },
+                    )
+                    if ll_resp.status_code == 200:
+                        ll_token = ll_resp.json().get("access_token", user_token)
+                        pages_resp = await client.get(
+                            "https://graph.facebook.com/v21.0/me/accounts",
+                            params={
+                                "access_token": ll_token,
+                                "fields": "id,access_token",
+                            },
+                        )
+                        if pages_resp.status_code == 200:
+                            for p in pages_resp.json().get("data", []):
+                                if p.get("id") == page_id:
+                                    final_page_token = p.get("access_token", page_token)
+                                    break
+            except Exception as e:
+                logger.warning("Long-lived token exchange failed: %s", e)
+
+        # Store Facebook
+        db.save_platform_token(phone_id, "facebook", final_page_token, page_id,
+                               page_name=page_name, account_username=page_name)
+
+        # Store Instagram if linked
+        ig_connected = False
+        if ig_account_id:
+            try:
+                async with _httpx.AsyncClient(timeout=10) as client:
+                    ig_resp = await client.get(
+                        f"https://graph.facebook.com/v21.0/{ig_account_id}",
+                        params={"fields": "username,name", "access_token": final_page_token},
+                    )
+                    ig_username = ""
+                    if ig_resp.status_code == 200:
+                        ig_username = ig_resp.json().get("username", "")
+                    db.save_platform_token(phone_id, "instagram", final_page_token, ig_account_id,
+                                           page_name=page_name, account_username=ig_username or page_name)
+                    ig_connected = True
+            except Exception as e:
+                logger.warning("IG account fetch failed: %s", e)
+                db.save_platform_token(phone_id, "instagram", final_page_token, ig_account_id,
+                                       page_name=page_name)
+                ig_connected = True
+
+        db.clear_conversation_state(phone_id)
+
+        # Notify user on WhatsApp
+        msg = f"✅ *Facebook connected!*\n\nPage: *{page_name}*"
+        if ig_connected:
+            msg += "\nInstagram: Connected"
+        msg += "\n\nSend *post* to create your first post!"
+        await wa.send_text(phone_id, msg)
+
+        return {"success": True, "ig_connected": ig_connected}
+
+    except Exception as e:
+        logger.error("store-token error: %s", e, exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/auth/callback")
 async def oauth_callback(request: Request):
     """Facebook OAuth callback — exchanges auth code for tokens."""

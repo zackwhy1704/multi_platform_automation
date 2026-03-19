@@ -91,40 +91,40 @@ async def handle_settings(db: BotDatabase, sender: str, text: str):
 
 
 async def handle_setup(db: BotDatabase, sender: str, text: str):
-    """Start platform connection — OAuth is primary, manual token is parallel fallback."""
-    oauth_url = get_oauth_url(sender)
+    """Start platform connection — JS SDK login is primary, manual token is fallback."""
+    # Show current connection status
+    fb_token = db.get_platform_token(sender, "facebook")
+    ig_token = db.get_platform_token(sender, "instagram")
 
-    if oauth_url:
-        # Show current connection status
-        fb_token = db.get_platform_token(sender, "facebook")
-        ig_token = db.get_platform_token(sender, "instagram")
+    status = ""
+    if fb_token:
+        fb_label = _account_label(fb_token, "facebook")
+        ig_label = _account_label(ig_token, "instagram") if ig_token else "Not linked"
+        status = (
+            f"*Currently connected:*\n"
+            f"  Facebook: *{fb_label}*\n"
+            f"  Instagram: *{ig_label}*\n\n"
+            f"Connect below to *switch to a different account*.\n\n"
+        )
 
-        status = ""
-        if fb_token:
-            fb_label = _account_label(fb_token, "facebook")
-            ig_label = _account_label(ig_token, "instagram") if ig_token else "Not linked"
-            status = (
-                f"*Currently connected:*\n"
-                f"  Facebook: *{fb_label}*\n"
-                f"  Instagram: *{ig_label}*\n\n"
-                f"Connect below to *switch to a different account*.\n\n"
-            )
+    if PUBLIC_BASE_URL:
+        connect_url = f"{PUBLIC_BASE_URL}/auth/connect/{sender}"
 
         await wa.send_text(
             sender,
             f"{status}"
             f"*Connect your Facebook & Instagram*\n\n"
             f"*Option 1 — One-click (recommended):*\n"
-            f"Tap the link below to connect via Facebook Login:\n\n"
-            f"{oauth_url}\n\n"
-            f"_If Facebook shows an error, use Option 2 instead._",
+            f"Tap the link below to log in with Facebook:\n\n"
+            f"{connect_url}\n\n"
+            f"_This opens a page where you log in with Facebook and select your Page. "
+            f"Your token is saved automatically._",
         )
         await wa.send_interactive_buttons(
             sender,
             "Facebook Login not working? Connect manually instead:",
             [{"id": "connect_manually", "title": "Connect Manually"}],
         )
-        # Keep state so both "Connect Manually" button AND direct token pastes are handled
         db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {})
 
     else:
