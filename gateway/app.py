@@ -66,12 +66,28 @@ def _seed_defaults(database: BotDatabase):
             logger.warning("Could not seed promo code %s: %s", code, e)
 
 
+def _run_migrations(database: BotDatabase):
+    """Run idempotent schema migrations on startup."""
+    migrations = [
+        # Add pfm_profile_key column if it doesn't exist (Post For Me integration)
+        "ALTER TABLE platform_tokens ADD COLUMN IF NOT EXISTS pfm_profile_key VARCHAR(255)",
+        # Add webhook_events table if missing
+        "CREATE TABLE IF NOT EXISTS webhook_events (event_id VARCHAR(255) PRIMARY KEY, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)",
+    ]
+    for sql in migrations:
+        try:
+            database.execute_query(sql)
+        except Exception as e:
+            logger.warning("Migration skipped: %s — %s", sql[:60], e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db
     db = BotDatabase()
     app.state.db = db
     logger.info("Gateway started — database pool ready")
+    _run_migrations(db)
     _seed_defaults(db)
     yield
     db.close()
