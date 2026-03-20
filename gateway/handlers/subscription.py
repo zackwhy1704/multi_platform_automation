@@ -77,8 +77,8 @@ async def handle_credits(db: BotDatabase, sender: str, text: str):
         f"  Comment reply: {ACTION_COSTS['comment_reply']} credits\n\n"
         + ("Credits reset on your next billing cycle." if is_sub else
            "Want more credits?\n"
-           f"  *subscribe* — Monthly plans from ${PLANS['pro']['price_usd']}\n"
-           "  *buy* — One-time credit packs from $4.99\n"
+           f"  *subscribe* — Monthly plans from USD ${PLANS['pro']['price_usd']}\n"
+           "  *buy* — One-time credit packs from USD $4.99\n"
            "  *referral* — Earn 30 credits per friend"),
     )
 
@@ -110,7 +110,7 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
         if price_id:
             rows.append({
                 "id": f"plan_{key}",
-                "title": f"{plan['name']} — ${plan['price_usd']}/mo",
+                "title": f"{plan['name']} — USD {plan['price_usd']}/mo",
                 "description": f"{plan['credits']:,} credits/month",
             })
 
@@ -118,9 +118,9 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
         await wa.send_interactive_list(
             sender,
             "*Choose a Subscription Plan*\n\n"
-            f"*Pro* — ${PLANS['pro']['price_usd']}/mo → {PLANS['pro']['credits']:,} credits\n"
-            f"*Business* — ${PLANS['business']['price_usd']}/mo → {PLANS['business']['credits']:,} credits\n\n"
-            "Prices shown in USD. Local currency (SGD/MYR) shown at checkout.\n"
+            f"*Pro* — USD ${PLANS['pro']['price_usd']}/mo → {PLANS['pro']['credits']:,} credits\n"
+            f"*Business* — USD ${PLANS['business']['price_usd']}/mo → {PLANS['business']['credits']:,} credits\n\n"
+            "Local currency will be shown at checkout.\n"
             "Have a promo code? Enter it at checkout.",
             "Choose Plan",
             [{"title": "Plans", "rows": rows}],
@@ -143,8 +143,8 @@ async def handle_buy_credits(db: BotDatabase, sender: str, text: str):
         if price_id:
             rows.append({
                 "id": f"pack_{pack['credits']}",
-                "title": f"{pack['label']} — ${pack['price_usd']}",
-                "description": f"${pack['price_usd']:.2f} one-time",
+                "title": f"{pack['label']} — USD {pack['price_usd']}",
+                "description": f"USD ${pack['price_usd']:.2f} one-time",
             })
 
     if not rows:
@@ -155,11 +155,11 @@ async def handle_buy_credits(db: BotDatabase, sender: str, text: str):
         sender,
         "*Credit Packs (One-Time Purchase)*\n\n"
         "Top up your credits instantly:\n"
-        f"  100 credits — $4.99\n"
-        f"  500 credits — $24.99\n"
-        f"  1,500 credits — $74.99\n"
-        f"  5,000 credits — $200.00\n\n"
-        "Prices in USD. Local currency at checkout.",
+        f"  100 credits — USD $4.99\n"
+        f"  500 credits — USD $24.99\n"
+        f"  1,500 credits — USD $74.99\n"
+        f"  5,000 credits — USD $200.00\n\n"
+        "Local currency will be shown at checkout.",
         "Choose Pack",
         [{"title": "Credit Packs", "rows": rows}],
     )
@@ -224,7 +224,7 @@ async def _create_checkout(sender: str, price_id: str, mode: str, label: str = "
         await wa.send_text(
             sender,
             f"Complete your purchase here:\n{session.url}\n\n"
-            "You'll see the price in your local currency at checkout.\n"
+            "Local currency will be shown at checkout.\n"
             "Have a promo code? Enter it on the checkout page.",
         )
     except Exception as e:
