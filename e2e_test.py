@@ -1351,9 +1351,9 @@ async def test_commands_all_respond(client: httpx.AsyncClient):
     await _seed_user_with_fb_token(TEST_PHONE)
 
     commands = [
-        "help", "post", "weekly", "schedule", "reply",
+        "help", "post", "schedule", "reply",
         "stats", "credits", "subscribe", "buy", "setup",
-        "disconnect", "settings", "referral", "language", "reset",
+        "disconnect", "settings", "referral", "language", "cancel", "reset",
     ]
 
     for i, cmd in enumerate(commands):
@@ -1414,7 +1414,7 @@ async def main():
         await test_manual_setup_flow(client)
         await test_post_flow_command(client)
         await test_media_upload_user_action_gate(client)
-        await test_weekly_command(client)
+        # weekly command removed
         await test_commands_all_respond(client)
 
     # Summary

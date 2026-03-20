@@ -207,6 +207,88 @@ def generate_caption_for_media(
     )
 
 
+def beautify_caption(
+    platform: str,
+    profile: dict,
+    user_caption: str,
+    media_file_path: Optional[str] = None,
+    media_mime: Optional[str] = None,
+    language: str = "en",
+) -> Optional[str]:
+    """Beautify a user's caption using AI vision (if media provided) + profile context.
+
+    Sends the actual image/video to Claude for visual context, combined with
+    the user's draft caption and their business profile, to produce a polished
+    caption that captures all three contexts.
+    """
+    if not client:
+        logger.error("Anthropic API key not configured")
+        return None
+
+    industry = ", ".join(profile.get("industry", [])) or "general business"
+    offerings = ", ".join(profile.get("offerings", [])) or "products and services"
+    tone = ", ".join(profile.get("tone", ["professional"]))
+
+    platform_instruction = {
+        "facebook": (
+            "Rewrite this as a polished Facebook post. Be conversational and engaging. "
+            "End with a question to drive comments. Use short paragraphs."
+        ),
+        "instagram": (
+            "Rewrite this as a polished Instagram caption. Open with a strong hook, "
+            "add relevant emojis, end with 10-15 relevant hashtags."
+        ),
+    }.get(platform, "Rewrite this as a polished social media post.")
+
+    system_prompt = (
+        "You are a social media content strategist. "
+        "The user has written a draft caption and attached media. "
+        "Rewrite and beautify their caption — keep their core message and intent, "
+        "but make it more engaging, polished, and platform-appropriate. "
+        "If media is attached, reference what you see in the image/video to make "
+        "the caption more specific and compelling. "
+        "Output ONLY the beautified caption — no preamble, no explanation, no labels."
+        + _lang_instruction(language)
+    )
+
+    # Build message content — include image if available
+    content_parts = []
+
+    if media_file_path and media_mime and media_mime.startswith("image/"):
+        try:
+            import base64
+            with open(media_file_path, "rb") as f:
+                image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+            content_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_mime,
+                    "data": image_data,
+                },
+            })
+        except Exception as e:
+            logger.warning("Could not read media file for beautify: %s", e)
+
+    content_parts.append({
+        "type": "text",
+        "text": (
+            f"{platform_instruction}\n\n"
+            f"User's draft caption:\n\"{user_caption}\"\n\n"
+            f"Business details:\n"
+            f"- Industry: {industry}\n"
+            f"- Products/Services: {offerings}\n"
+            f"- Tone: {tone}"
+        ),
+    })
+
+    return _call_claude(
+        max_tokens=1024,
+        system=system_prompt,
+        messages=[{"role": "user", "content": content_parts}],
+    )
+
+
 def generate_image_search_query(profile: dict, topic: Optional[str] = None) -> str:
     """Generate a Pexels stock photo search query from the business profile."""
     industry = ", ".join(profile.get("industry", [])) or "business"

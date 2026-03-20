@@ -25,7 +25,6 @@ COMMANDS = {
     "start": onboarding.handle_start,
     "help": onboarding.handle_help,
     "post": actions.handle_post,
-    "weekly": actions.handle_auto,
     "schedule": actions.handle_schedule,
     "reply": actions.handle_reply,
     "stats": actions.handle_stats,
@@ -62,13 +61,6 @@ STATE_HANDLERS = {
     ConversationState.AWAITING_POST_CONFIRM: actions.handle_post_step,
     ConversationState.AWAITING_POST_CONTENT: actions.handle_post_step,
     ConversationState.AWAITING_SCHEDULE_TIME: actions.handle_post_step,
-    # Weekly auto-post
-    ConversationState.AWAITING_AUTO_PLATFORM: actions.handle_auto_step,
-    ConversationState.AWAITING_AUTO_COUNT: actions.handle_auto_step,
-    ConversationState.AWAITING_AUTO_COUNT_CUSTOM: actions.handle_auto_step,
-    ConversationState.AWAITING_AUTO_TYPE: actions.handle_auto_step,
-    ConversationState.AWAITING_AUTO_TYPE_CUSTOM: actions.handle_auto_step,
-    ConversationState.AWAITING_AUTO_CONFIRM: actions.handle_auto_step,
     # Engagement
     ConversationState.AWAITING_REPLY_PLATFORM: actions.handle_reply_step,
     # Credit packs
@@ -284,13 +276,9 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
             data["platform"] = "facebook" if fb_token else "instagram"
             platform_label = "Facebook" if fb_token else "Instagram"
             db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
-            await wa.send_interactive_buttons(
+            await wa.send_text(
                 sender,
-                f"Your {media_type} is ready for {platform_label}! How would you like to add a caption?",
-                [
-                    {"id": "ai", "title": "Generate with AI"},
-                    {"id": "write_caption", "title": "Write My Own"},
-                ],
+                f"Your {media_type} is ready for {platform_label}! Type your caption below:",
             )
         return
 
@@ -318,7 +306,6 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         sender,
         "I didn't understand that. Here are the commands you can use:\n\n"
         "*post* — Create a post (photo/video/text)\n"
-        "*weekly* — Auto-generate posts for the week\n"
         "*schedule* — Schedule a post\n"
         "*reply* — Auto-reply to comments\n"
         "*stats* — View your stats\n"

@@ -155,16 +155,12 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
 
         data["platform"] = platform
 
-        # If media already attached (direct-drop flow), go straight to caption choice
+        # If media already attached (direct-drop flow), go straight to caption input
         if data.get("post_type") == "own_media" and data.get("media_filename"):
             db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
-            await wa.send_interactive_buttons(
+            await wa.send_text(
                 sender,
-                f"Your media is ready for {PLATFORM_LABELS[platform]}! How would you like to add a caption?",
-                [
-                    {"id": "ai", "title": "Generate with AI"},
-                    {"id": "write_caption", "title": "Write My Own"},
-                ],
+                f"Your media is ready for {PLATFORM_LABELS[platform]}! Type your caption below:",
             )
         else:
             data["post_type"] = "own_media"
@@ -184,7 +180,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
                 await wa.send_text(
                     sender,
                     f"Got it! Your post:\n\n_{text.strip()}_\n\n"
-                    "Type *ok* to use it, *ai* to rewrite with AI, or type new text to replace it.",
+                    "Type *ok* to use it, or type new text to replace it.",
                 )
                 return
 
@@ -219,75 +215,19 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
                 preview_url = get_media_public_url(media_info["filename"], PUBLIC_BASE_URL)
                 sent = await wa.send_video(sender, preview_url) if is_vid else await wa.send_image(sender, preview_url)
 
-        # Step 2: Move state to AWAITING_POST_CAPTION and send caption choice buttons.
-        # The user MUST tap a button to continue — this is the guarantee that they have
-        # seen the media preview before any caption prompt appears.
+        # Step 2: Move state to AWAITING_POST_CAPTION — ask user to write their caption.
         db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
-        await wa.send_interactive_buttons(
+        await wa.send_text(
             sender,
-            f"Your {media_type} is ready! How would you like to add a caption?",
-            [
-                {"id": "ai", "title": "Generate with AI"},
-                {"id": "write_caption", "title": "Write My Own"},
-            ],
+            f"Your {media_type} is ready! Type your caption below:",
         )
 
     # --- CAPTION / CONTENT ---
     elif state == ConversationState.AWAITING_POST_CAPTION:
-        platform = data.get("platform", "facebook")
-        normalized = text.lower().strip()
-
-        if normalized == "write_caption":
-            await wa.send_text(sender, "Type your caption below:")
+        caption = text.strip()
+        if not caption:
+            await wa.send_text(sender, "Please type your caption:")
             return
-
-        if normalized == "ai":
-            await wa.send_text(sender, "Generating caption...")
-            profile = db.get_user_profile(sender)
-            from services.ai.ai_service import generate_caption_for_media
-            from gateway.media import is_video
-
-            media_type = "video" if is_video(data.get("media_mime", "")) else "photo"
-            try:
-                caption = await asyncio.to_thread(
-                    generate_caption_for_media, platform, profile or {}, media_type=media_type,
-                    language=get_language()
-                )
-            except Exception as e:
-                logger.error("Caption generation error for %s: %s", sender, e)
-                caption = None
-
-            if not caption or not caption.strip():
-                await wa.send_text(
-                    sender,
-                    "Caption generation failed. Please try again or write your own caption.",
-                )
-                await wa.send_interactive_buttons(
-                    sender,
-                    "How would you like to add a caption?",
-                    [
-                        {"id": "ai", "title": "Try Again"},
-                        {"id": "write_caption", "title": "Write My Own"},
-                    ],
-                )
-                return
-
-            caption = caption.strip()
-            # Show the generated caption FIRST so user can read it before being prompted to publish
-            await wa.send_text(sender, f"Here's your generated caption:\n\n{caption}")
-
-        else:
-            caption = text.strip()
-            if not caption:
-                await wa.send_interactive_buttons(
-                    sender,
-                    "How would you like to add a caption?",
-                    [
-                        {"id": "ai", "title": "Generate with AI"},
-                        {"id": "write_caption", "title": "Write My Own"},
-                    ],
-                )
-                return
 
         data["caption"] = caption
         db.set_conversation_state(sender, ConversationState.AWAITING_POST_CONFIRM, data)
@@ -295,46 +235,15 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
 
     # --- TEXT-ONLY CONTENT ---
     elif state == ConversationState.AWAITING_POST_CONTENT:
-        platform = data.get("platform", "facebook")
         normalized = text.lower().strip()
-        use_ai = normalized == "ai"
         use_existing = normalized == "ok" and data.get("caption")
 
-        if use_ai:
-            await wa.send_text(sender, "Generating post...")
-            profile = db.get_user_profile(sender)
-            from services.ai.ai_service import generate_post
-            try:
-                caption = await asyncio.to_thread(generate_post, platform, profile or {}, language=get_language())
-            except Exception as e:
-                logger.error("Post generation error for %s: %s", sender, e)
-                caption = None
-
-            if not caption or not caption.strip():
-                await wa.send_text(
-                    sender,
-                    "Post generation failed. Please try again or write your own text.",
-                )
-                await wa.send_text(
-                    sender,
-                    "Write your Facebook post below.\n\n"
-                    "Or type *ai* to try generating again.",
-                )
-                return
-
-            caption = caption.strip()
-            # Show the generated post FIRST so user can read it before being prompted to publish
-            await wa.send_text(sender, f"Here's your generated post:\n\n{caption}")
-        elif use_existing:
+        if use_existing:
             caption = data["caption"]
         else:
             caption = text.strip()
             if not caption:
-                await wa.send_text(
-                    sender,
-                    "Write your Facebook post below.\n\n"
-                    "Or type *ai* to have AI generate one for you.",
-                )
+                await wa.send_text(sender, "Write your post text below:")
                 return
 
         data["caption"] = caption
@@ -348,28 +257,24 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
         if choice in ("approve", "yes", "publish", "post"):
             await _publish_post(db, sender, data)
 
+        elif choice == "beautify":
+            await _beautify_caption(db, sender, data)
+
         elif choice in ("edit", "change"):
-            db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
             post_type = data.get("post_type", "text_only")
             if post_type == "own_media":
-                await wa.send_text(sender, "Write a new caption (or type *ai* to generate one):")
+                db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
+                await wa.send_text(sender, "Type your new caption:")
             else:
-                await wa.send_text(sender, "Give me a new topic or write the caption directly:")
+                db.set_conversation_state(sender, ConversationState.AWAITING_POST_CONTENT, data)
+                await wa.send_text(sender, "Type your new post text:")
 
-        elif choice in ("discard", "no"):
+        elif choice in ("discard", "no", "cancel"):
             db.clear_conversation_state(sender)
             await wa.send_text(sender, "Post cancelled. No credits deducted.\n\nSend *post* to start again.")
 
         else:
-            await wa.send_interactive_buttons(
-                sender,
-                "Would you like to publish this post?",
-                [
-                    {"id": "approve", "title": "Publish Now"},
-                    {"id": "edit", "title": "Edit Caption"},
-                    {"id": "discard", "title": "Cancel"},
-                ],
-            )
+            await _send_confirm_buttons(sender)
 
     # --- SCHEDULE TIME ---
     elif state == ConversationState.AWAITING_SCHEDULE_TIME:
@@ -523,10 +428,86 @@ async def _send_preview(sender: str, data: dict):
         f"*Caption:*\n{caption_preview}\n\nReady to publish?",
         [
             {"id": "approve", "title": "Publish Now"},
+            {"id": "beautify", "title": "Beautify with AI"},
             {"id": "edit", "title": "Edit Caption"},
-            {"id": "discard", "title": "Cancel"},
         ],
     )
+
+
+async def _send_confirm_buttons(sender: str):
+    """Re-send the confirm buttons."""
+    await wa.send_interactive_buttons(
+        sender,
+        "Would you like to publish this post?",
+        [
+            {"id": "approve", "title": "Publish Now"},
+            {"id": "beautify", "title": "Beautify with AI"},
+            {"id": "edit", "title": "Edit Caption"},
+        ],
+    )
+
+
+async def _beautify_caption(db: BotDatabase, sender: str, data: dict):
+    """Beautify the user's caption with AI vision + profile context (2 credits)."""
+    from shared.credits import ACTION_COSTS
+    cost = ACTION_COSTS.get("beautify_caption", 2)
+
+    cm = CreditManager(db)
+    if not cm.has_enough(sender, "beautify_caption"):
+        balance = cm.get_balance(sender)
+        await wa.send_text(
+            sender,
+            f"Beautify costs *{cost}* credits but you have *{balance}*.\n\n"
+            "Send *buy* for credit packs.",
+        )
+        await _send_confirm_buttons(sender)
+        return
+
+    await wa.send_text(sender, "Beautifying your caption with AI...")
+
+    platform = data.get("platform", "facebook")
+    user_caption = data.get("caption", "")
+    profile = db.get_user_profile(sender) or {}
+
+    # Resolve media file path for vision context
+    media_file_path = None
+    media_mime = data.get("media_mime", "")
+    if data.get("media_filename"):
+        import os
+        from gateway.media import MEDIA_DIR
+        candidate = os.path.join(MEDIA_DIR, data["media_filename"])
+        if os.path.exists(candidate):
+            media_file_path = candidate
+
+    from services.ai.ai_service import beautify_caption
+    try:
+        beautified = await asyncio.to_thread(
+            beautify_caption, platform, profile, user_caption,
+            media_file_path=media_file_path, media_mime=media_mime,
+            language=get_language(),
+        )
+    except Exception as e:
+        logger.error("Beautify caption error for %s: %s", sender, e)
+        beautified = None
+
+    if not beautified or not beautified.strip():
+        await wa.send_text(sender, "Beautify failed. Your original caption is unchanged.")
+        await _send_confirm_buttons(sender)
+        return
+
+    # Deduct credits after successful generation
+    cm.deduct(sender, "beautify_caption", platform)
+    balance = cm.get_balance(sender)
+
+    beautified = beautified.strip()
+    data["caption"] = beautified
+    db.set_conversation_state(sender, ConversationState.AWAITING_POST_CONFIRM, data)
+
+    await wa.send_text(
+        sender,
+        f"Here's your beautified caption (*{cost}* credits used, *{balance}* remaining):\n\n{beautified}",
+    )
+    await _send_confirm_buttons(sender)
 
 
 # ===========================================================================
@@ -601,366 +582,6 @@ async def _publish_post(db: BotDatabase, sender: str, data: dict):
             f"Your *{cost} credits* have been refunded. Remaining: *{balance}*\n\n"
             f"Send *post* to try again.",
         )
-
-
-# ===========================================================================
-# WEEKLY AUTO-POST (STANDALONE — completely separate from single post)
-# ===========================================================================
-
-async def handle_auto(db: BotDatabase, sender: str, text: str):
-    """Entry point for weekly auto-post scheduling (NOT immediate posting)."""
-    cm = CreditManager(db)
-    balance = cm.get_balance(sender)
-    if balance < ACTION_COSTS["text_post"]:
-        await wa.send_text(
-            sender,
-            f"You need at least *{ACTION_COSTS['text_post']}* credits to use auto-post.\n\n"
-            "Send *buy* for credit packs or *subscribe* for a plan.",
-        )
-        return
-
-    fb_token = db.get_platform_token(sender, "facebook")
-    ig_token = db.get_platform_token(sender, "instagram")
-
-    if not fb_token and not ig_token:
-        await wa.send_text(sender, "Connect a platform first. Send *setup*.")
-        return
-
-    intro = (
-        "📅 *Weekly Auto-Post Scheduler*\n\n"
-        "This will generate and *schedule posts for the week ahead* — "
-        "they'll publish automatically at the right times.\n\n"
-        "_This is NOT for posting right now. Use *post* for an immediate single post._"
-    )
-
-    if not fb_token:
-        await wa.send_text(
-            sender,
-            "Weekly auto-post is for *Facebook text posts* only.\n\n"
-            "Send *setup* to connect your Facebook account first.",
-        )
-        return
-
-    data = {"platform": "facebook"}
-    db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_COUNT, data)
-    await wa.send_text(sender, intro)
-    await _send_auto_count_options(sender)
-
-
-async def _send_auto_count_options(sender: str):
-    """Send post count options as interactive list."""
-    text_3 = 3 * ACTION_COSTS["text_post"]
-    text_5 = 5 * ACTION_COSTS["text_post"]
-    text_7 = 7 * ACTION_COSTS["text_post"]
-
-    await wa.send_interactive_list(
-        sender,
-        "How many posts should I schedule this week?",
-        "Choose Count",
-        [
-            {
-                "title": "Post Count",
-                "rows": [
-                    {"id": "3", "title": "3 Posts", "description": f"~{text_3} credits"},
-                    {"id": "5", "title": "5 Posts", "description": f"~{text_5} credits"},
-                    {"id": "7", "title": "7 Posts (Daily)", "description": f"~{text_7} credits"},
-                    {"id": "others", "title": "Custom Count", "description": "Type a number from 1 to 14"},
-                ],
-            }
-        ],
-    )
-
-
-def _send_auto_type_options_rows(platform: str) -> list:
-    """Build the content type rows for auto-post (text-only Facebook only)."""
-    rows = [
-        {"id": "text_only", "title": "Text Posts", "description": f"{ACTION_COSTS['text_post']} credits each"},
-        {"id": "others", "title": "Custom Theme", "description": "Describe your own content theme"},
-    ]
-    return rows
-
-
-async def handle_auto_step(db: BotDatabase, sender: str, text: str,
-                            state: ConversationState, data: dict, **kwargs):
-    """Handle weekly auto-post states."""
-
-    # --- PLATFORM ---
-    if state == ConversationState.AWAITING_AUTO_PLATFORM:
-        platform = text.lower()
-        if platform not in PLATFORM_LABELS:
-            await wa.send_interactive_buttons(
-                sender,
-                "Please tap one of the buttons below:",
-                [
-                    {"id": "facebook", "title": "Facebook"},
-                    {"id": "instagram", "title": "Instagram"},
-                ],
-            )
-            return
-        data["platform"] = platform
-        db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_COUNT, data)
-        await _send_auto_count_options(sender)
-
-    # --- COUNT ---
-    elif state == ConversationState.AWAITING_AUTO_COUNT:
-        choice = text.strip().lower()
-
-        if choice == "others":
-            db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_COUNT_CUSTOM, data)
-            await wa.send_text(
-                sender,
-                "How many posts do you want to schedule? Type a number between 1 and 14:",
-            )
-            return
-
-        try:
-            count = int(choice)
-        except ValueError:
-            count = 0
-
-        if count not in (3, 5, 7):
-            await _send_auto_count_options(sender)
-            return
-
-        data["count"] = count
-        db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_TYPE, data)
-
-        platform = data.get("platform", "facebook")
-        rows = _send_auto_type_options_rows(platform)
-        total_text = count * ACTION_COSTS["text_post"]
-
-        await wa.send_interactive_list(
-            sender,
-            f"What type of content for your *{count} scheduled posts*?\n\n"
-            f"Estimated cost: {total_text} credits",
-            "Choose Type",
-            [{"title": "Content Types", "rows": rows}],
-        )
-
-    # --- CUSTOM COUNT INPUT ---
-    elif state == ConversationState.AWAITING_AUTO_COUNT_CUSTOM:
-        try:
-            count = int(text.strip())
-        except ValueError:
-            await wa.send_text(
-                sender,
-                "Please type a valid number between 1 and 14.\n\nHow many posts to schedule?",
-            )
-            return
-
-        if not 1 <= count <= 14:
-            await wa.send_text(
-                sender,
-                "Please enter a number between 1 and 14.\n\nHow many posts to schedule?",
-            )
-            return
-
-        data["count"] = count
-        db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_TYPE, data)
-
-        platform = data.get("platform", "facebook")
-        rows = _send_auto_type_options_rows(platform)
-        total_text = count * ACTION_COSTS["text_post"]
-
-        await wa.send_interactive_list(
-            sender,
-            f"What type of content for your *{count} scheduled posts*?\n\n"
-            f"Estimated cost: {total_text} credits",
-            "Choose Type",
-            [{"title": "Content Types", "rows": rows}],
-        )
-
-    # --- TYPE ---
-    elif state == ConversationState.AWAITING_AUTO_TYPE:
-        content_type = text.lower().replace(" ", "_")
-        platform = data.get("platform", "facebook")
-        valid_types = {"text_only"}
-
-        if content_type == "others":
-            db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_TYPE_CUSTOM, data)
-            await wa.send_text(
-                sender,
-                "What content type or theme would you like for the batch?\n\n"
-                "_e.g. \"Motivational quotes\", \"Product promotions\", \"Behind the scenes\"_",
-            )
-            return
-
-        if content_type not in valid_types:
-            rows = _send_auto_type_options_rows(platform)
-            await wa.send_interactive_list(
-                sender,
-                "Please choose a content type from the list:",
-                "Choose Type",
-                [{"title": "Content Types", "rows": rows}],
-            )
-            return
-
-        await _proceed_auto_generation(db, sender, data, content_type)
-
-    # --- CUSTOM TYPE INPUT ---
-    elif state == ConversationState.AWAITING_AUTO_TYPE_CUSTOM:
-        custom_theme = text.strip()
-        if not custom_theme:
-            await wa.send_text(
-                sender,
-                "Please describe the content type or theme for your posts:",
-            )
-            return
-        data["custom_theme"] = custom_theme
-        await _proceed_auto_generation(db, sender, data, "text_only")
-
-    # --- CONFIRM ---
-    elif state == ConversationState.AWAITING_AUTO_CONFIRM:
-        choice = text.lower().strip()
-
-        if choice in ("approve_all", "approve", "yes", "schedule"):
-            await _schedule_batch_posts(db, sender, data)
-        elif choice in ("discard", "no"):
-            db.clear_conversation_state(sender)
-            await wa.send_text(sender, "Auto-post cancelled. No credits deducted.\n\nSend *weekly* to try again.")
-        else:
-            await wa.send_interactive_buttons(
-                sender,
-                "Schedule all posts or cancel?",
-                [
-                    {"id": "approve_all", "title": "Schedule All"},
-                    {"id": "discard", "title": "Cancel"},
-                ],
-            )
-
-
-async def _proceed_auto_generation(db: BotDatabase, sender: str, data: dict, content_type: str):
-    """After content type is chosen, generate the batch and show preview."""
-    count = data.get("count", 3)
-    platform = data.get("platform", "facebook")
-    action = POST_TYPE_ACTIONS.get(content_type, "text_post")
-    total_cost = count * get_action_cost(action)
-
-    cm = CreditManager(db)
-    balance = cm.get_balance(sender)
-    if balance < total_cost:
-        await wa.send_text(
-            sender,
-            f"You need *{total_cost}* credits for {count} {content_type.replace('_', ' ')} posts "
-            f"but you have *{balance}*.\n\n"
-            "Try fewer posts, or send *buy* for credit packs.",
-        )
-        rows = _send_auto_type_options_rows(platform)
-        await wa.send_interactive_list(
-            sender,
-            "Choose a different content type:",
-            "Choose Type",
-            [{"title": "Content Types", "rows": rows}],
-        )
-        return
-
-    data["content_type"] = content_type
-    data["total_cost"] = total_cost
-
-    await wa.send_text(
-        sender,
-        f"Generating *{count} {content_type.replace('_', ' ')} posts* for "
-        f"{PLATFORM_LABELS[platform]}...\n\n"
-        f"Total cost when scheduled: *{total_cost} credits*\n"
-        f"This may take a moment.",
-    )
-
-    profile = db.get_user_profile(sender)
-    if not profile:
-        await wa.send_text(sender, "Profile not found. Send *start* to set up.")
-        db.clear_conversation_state(sender)
-        return
-
-    custom_theme = data.get("custom_theme")
-    posts = await _generate_batch_posts(profile, platform, content_type, count, custom_theme=custom_theme)
-    data["posts"] = posts
-
-    # Send preview of all posts
-    for i, post in enumerate(posts, 1):
-        preview = f"*Post {i}/{count}*\n"
-        if post.get("media_type"):
-            preview += f"Media: {post['media_type']}\n"
-        preview += f"\n{post.get('caption', '')[:300]}"
-        if len(post.get("caption", "")) > 300:
-            preview += "..."
-        await wa.send_text(sender, preview)
-
-    db.set_conversation_state(sender, ConversationState.AWAITING_AUTO_CONFIRM, data)
-    await wa.send_interactive_buttons(
-        sender,
-        f"*{count} posts ready to schedule!* Total: *{total_cost} credits*\n\n"
-        "Posts will be spread evenly across the next 7 days and published automatically.",
-        [
-            {"id": "approve_all", "title": "Schedule All"},
-            {"id": "discard", "title": "Cancel"},
-        ],
-    )
-
-
-async def _generate_batch_posts(profile: dict, platform: str, content_type: str, count: int,
-                                 custom_theme: str = None) -> list:
-    """Generate a batch of text-only posts for auto-post."""
-    from services.ai.ai_service import generate_post
-
-    topic = custom_theme or None
-    lang = get_language()
-    captions = await asyncio.gather(*[
-        asyncio.to_thread(generate_post, platform, profile, topic=topic, language=lang)
-        for _ in range(count)
-    ])
-    return [
-        {"index": i, "caption": captions[i] or f"Post {i + 1} for the week!", "media_type": "Text only"}
-        for i in range(count)
-    ]
-
-
-async def _schedule_batch_posts(db: BotDatabase, sender: str, data: dict):
-    """Deduct credits and schedule all batch posts across the week."""
-    platform = data.get("platform", "facebook")
-    content_type = data.get("content_type", "text_only")
-    posts = data.get("posts", [])
-    action = POST_TYPE_ACTIONS.get(content_type, "text_post")
-
-    cm = CreditManager(db)
-    total_cost = data.get("total_cost", 0)
-
-    # Verify credits one more time
-    if cm.get_balance(sender) < total_cost:
-        await wa.send_text(sender, "Insufficient credits. Send *buy* for credit packs.")
-        db.clear_conversation_state(sender)
-        return
-
-    # Schedule posts evenly across 7 days starting tomorrow 9 AM
-    now = datetime.now()
-    base_time = now.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    interval_days = 7 / len(posts) if posts else 1
-
-    scheduled_count = 0
-    for i, post in enumerate(posts):
-        scheduled_at = base_time + timedelta(days=int(i * interval_days))
-        media_url = post.get("media_url")
-
-        if not cm.deduct(sender, action, platform):
-            await wa.send_text(
-                sender,
-                f"Ran out of credits after scheduling {scheduled_count} posts.",
-            )
-            break
-
-        db.save_scheduled_content(sender, platform, post.get("caption", ""), scheduled_at, media_url=media_url)
-        scheduled_count += 1
-
-    db.clear_conversation_state(sender)
-    balance = cm.get_balance(sender)
-    await wa.send_text(
-        sender,
-        f"*{scheduled_count} posts scheduled!*\n\n"
-        f"Platform: {PLATFORM_LABELS[platform]}\n"
-        f"Schedule: Next 7 days starting tomorrow at 9 AM\n"
-        f"Credits used: *{scheduled_count * get_action_cost(action)}* | Remaining: *{balance}*\n\n"
-        "Posts will be published automatically at the scheduled times.\n\n"
-        "Send *post* to publish something right now, or *weekly* to schedule another batch.",
-    )
 
 
 # ===========================================================================

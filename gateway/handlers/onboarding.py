@@ -487,7 +487,6 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
         "*Available Commands*\n\n"
         "📝 *Content*\n"
         f"  post — Create a post ({ACTION_COSTS['text_post']}–{ACTION_COSTS['own_media_post']} credits)\n"
-        "  weekly — Auto-generate a week of posts\n"
         "  schedule — Schedule a post for later\n"
         f"  reply — Auto-reply to comments ({ACTION_COSTS['comment_reply']} credits)\n\n"
         "💳 *Credits & Plans*\n"

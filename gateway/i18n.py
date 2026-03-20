@@ -41,6 +41,7 @@ ZH_STATIC = {
     "Edit Caption": "编辑文案",
     "Cancel": "取消",
     "Try Again": "重试",
+    "Beautify with AI": "AI 美化",
     "Done — I connected": "完成 — 已连接",
     "Disconnect All": "断开全部",
     "Yes": "是",
