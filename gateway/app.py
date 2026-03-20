@@ -73,6 +73,8 @@ def _run_migrations(database: BotDatabase):
         "ALTER TABLE platform_tokens ADD COLUMN IF NOT EXISTS pfm_profile_key VARCHAR(255)",
         # Add webhook_events table if missing
         "CREATE TABLE IF NOT EXISTS webhook_events (event_id VARCHAR(255) PRIMARY KEY, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)",
+        # Add display_language column for i18n support
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_language VARCHAR(5) DEFAULT 'en'",
     ]
     for sql in migrations:
         try:

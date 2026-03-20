@@ -119,11 +119,14 @@ class BotDatabase:
         self.execute_query("UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE phone_number_id = %s", (phone_number_id,))
 
     def get_display_language(self, phone_number_id: str) -> str:
-        row = self.execute_query(
-            "SELECT display_language FROM users WHERE phone_number_id = %s",
-            (phone_number_id,), fetch="one",
-        )
-        return (row or {}).get("display_language") or "en"
+        try:
+            row = self.execute_query(
+                "SELECT display_language FROM users WHERE phone_number_id = %s",
+                (phone_number_id,), fetch="one",
+            )
+            return (row or {}).get("display_language") or "en"
+        except Exception:
+            return "en"
 
     def set_display_language(self, phone_number_id: str, lang: str):
         self.execute_query(
