@@ -5,6 +5,7 @@ Integrates with Pexels API for stock images.
 """
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -20,9 +21,28 @@ client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY els
 MAX_RETRIES = 3
 RETRY_DELAYS = [2, 5, 10]  # seconds between retries
 
+# Conversational preamble phrases Claude sometimes emits — strip them from output
+_PREAMBLE_PATTERNS = re.compile(
+    r"^(i'?d be happy to help[.!]*|sure[,!]|certainly[,!]|of course[,!]|"
+    r"here'?s? (is )?(your|a|an|the)|here you go[.!]*|"
+    r"absolutely[,!]|great[,!]|no problem[,!])[^\n]*\n*",
+    re.IGNORECASE,
+)
 
-def _call_claude(*, model: str = AI_MODEL, max_tokens: int = 1024, messages: list) -> Optional[str]:
-    """Call Claude with retry logic for transient errors (529 overloaded, 5xx)."""
+
+def _strip_preamble(text: str) -> str:
+    """Remove any conversational opener Claude might prepend."""
+    return _PREAMBLE_PATTERNS.sub("", text).strip()
+
+
+def _call_claude(
+    *,
+    model: str = AI_MODEL,
+    max_tokens: int = 1024,
+    system: str,
+    messages: list,
+) -> Optional[str]:
+    """Call Claude with a system prompt and retry logic for transient errors."""
     if not client:
         logger.error("Anthropic API key not configured")
         return None
@@ -32,14 +52,23 @@ def _call_claude(*, model: str = AI_MODEL, max_tokens: int = 1024, messages: lis
             response = client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
+                system=system,
                 messages=messages,
             )
-            return response.content[0].text.strip()
+            raw = response.content[0].text.strip()
+            cleaned = _strip_preamble(raw)
+            if cleaned:
+                return cleaned
+            # If stripping removed everything, return raw (better than empty)
+            logger.warning("Preamble strip removed entire response — returning raw")
+            return raw.strip() or None
         except anthropic.APIStatusError as e:
             if e.status_code in (429, 529, 500, 502, 503) and attempt < MAX_RETRIES - 1:
                 delay = RETRY_DELAYS[attempt]
-                logger.warning("Claude API %d (attempt %d/%d), retrying in %ds...",
-                               e.status_code, attempt + 1, MAX_RETRIES, delay)
+                logger.warning(
+                    "Claude API %d (attempt %d/%d), retrying in %ds...",
+                    e.status_code, attempt + 1, MAX_RETRIES, delay,
+                )
                 time.sleep(delay)
                 continue
             logger.error("Claude API error (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
@@ -55,49 +84,44 @@ def generate_post(
     profile: dict,
     topic: Optional[str] = None,
 ) -> Optional[str]:
-    """
-    Generate a social media post using Claude.
-
-    Args:
-        platform: 'facebook' or 'instagram'
-        profile: User profile dict with industry, skills, goals, tone
-        topic: Optional topic/theme for the post
-
-    Returns:
-        Generated post text, or None on failure
-    """
-    industry = ", ".join(profile.get("industry", []))
-    offerings = ", ".join(profile.get("offerings", []))
-    goals = ", ".join(profile.get("business_goals", []))
+    """Generate a social media post using Claude."""
+    industry = ", ".join(profile.get("industry", [])) or "general business"
+    offerings = ", ".join(profile.get("offerings", [])) or "products and services"
+    goals = ", ".join(profile.get("business_goals", [])) or "grow the business"
     tone = ", ".join(profile.get("tone", ["professional"]))
 
-    platform_guidance = {
+    platform_instruction = {
         "facebook": (
-            "Write a Facebook post. Keep it conversational and engaging. "
-            "Include a question to drive comments. Use short paragraphs."
+            "Write a single Facebook post. Be conversational and engaging. "
+            "End with a question to drive comments. Use short paragraphs."
         ),
         "instagram": (
-            "Write an Instagram caption. Start with a hook, be concise and visual. "
-            "Include relevant emojis. Add 10-15 hashtags at the end."
+            "Write a single Instagram caption. Open with a strong hook, be concise and visual. "
+            "Include relevant emojis. End with 10-15 relevant hashtags."
         ),
-    }
+    }.get(platform, "Write a single engaging social media post.")
 
-    topic_line = f"\nTopic/theme: {topic}" if topic else ""
+    topic_line = f"\nPost topic/theme: {topic}" if topic else ""
 
-    prompt = f"""You are a social media content strategist.
-
-{platform_guidance.get(platform, platform_guidance['facebook'])}
-
-Business profile:
-- Industry: {industry}
-- Products/Services: {offerings}
-- Business goals: {goals}
-- Preferred tone: {tone}
-{topic_line}
-
-Write ONE post. Output ONLY the post text, no preamble or explanation."""
-
-    return _call_claude(max_tokens=1024, messages=[{"role": "user", "content": prompt}])
+    return _call_claude(
+        max_tokens=1024,
+        system=(
+            "You are a social media content strategist. "
+            "Output ONLY the post text — no preamble, no explanation, no labels."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"{platform_instruction}\n\n"
+                f"Business details:\n"
+                f"- Industry: {industry}\n"
+                f"- Products/Services: {offerings}\n"
+                f"- Goals: {goals}\n"
+                f"- Tone: {tone}"
+                f"{topic_line}"
+            ),
+        }],
+    )
 
 
 def generate_reply(
@@ -107,67 +131,88 @@ def generate_reply(
     tone: str = "professional",
 ) -> Optional[str]:
     """Generate an AI reply to a comment."""
-    prompt = f"""You are replying to a comment on {platform}.
-
-Original post: {original_post[:500]}
-Comment to reply to: {comment[:500]}
-Tone: {tone}
-
-Write a brief, authentic reply (1-3 sentences). Output ONLY the reply text."""
-
-    return _call_claude(max_tokens=256, messages=[{"role": "user", "content": prompt}])
+    return _call_claude(
+        max_tokens=256,
+        system=(
+            "You are a community manager replying to comments on social media. "
+            "Output ONLY the reply text — no preamble, no explanation."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Platform: {platform}\n"
+                f"Tone: {tone}\n\n"
+                f"Original post: {original_post[:500]}\n"
+                f"Comment to reply to: {comment[:500]}\n\n"
+                "Write a brief, authentic reply (1-3 sentences)."
+            ),
+        }],
+    )
 
 
 def generate_caption_for_media(
     platform: str,
     profile: dict,
-    media_type: str = "image",
+    media_type: str = "photo",
     topic: Optional[str] = None,
 ) -> Optional[str]:
-    """Generate a caption/description for user-provided media."""
-    industry = ", ".join(profile.get("industry", []))
-    offerings = ", ".join(profile.get("offerings", []))
+    """Generate a caption for user-provided photo or video."""
+    industry = ", ".join(profile.get("industry", [])) or "general business"
+    offerings = ", ".join(profile.get("offerings", [])) or "products and services"
     tone = ", ".join(profile.get("tone", ["professional"]))
 
-    platform_guidance = {
-        "facebook": "Write a Facebook caption for this photo/video. Conversational, include a question.",
-        "instagram": "Write an Instagram caption. Start with a hook, add emojis, end with 10-15 hashtags.",
-    }
+    platform_instruction = {
+        "facebook": (
+            f"Write a Facebook caption for this {media_type}. "
+            "Be conversational. End with a question to drive comments."
+        ),
+        "instagram": (
+            f"Write an Instagram caption for this {media_type}. "
+            "Open with a strong hook, add relevant emojis, end with 10-15 hashtags."
+        ),
+    }.get(platform, f"Write a caption for this {media_type}.")
 
     topic_line = f"\nThe {media_type} is about: {topic}" if topic else ""
 
-    prompt = f"""You are a social media content strategist.
-
-{platform_guidance.get(platform, platform_guidance['facebook'])}
-
-Business profile:
-- Industry: {industry}
-- Products/Services: {offerings}
-- Preferred tone: {tone}
-{topic_line}
-
-The user is posting a {media_type}. Write a caption that complements it.
-Output ONLY the caption text, no preamble."""
-
-    return _call_claude(max_tokens=512, messages=[{"role": "user", "content": prompt}])
+    return _call_claude(
+        max_tokens=512,
+        system=(
+            "You are a social media content strategist. "
+            "Output ONLY the caption text — no preamble, no explanation, no labels."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"{platform_instruction}\n\n"
+                f"Business details:\n"
+                f"- Industry: {industry}\n"
+                f"- Products/Services: {offerings}\n"
+                f"- Tone: {tone}"
+                f"{topic_line}"
+            ),
+        }],
+    )
 
 
 def generate_image_search_query(profile: dict, topic: Optional[str] = None) -> str:
-    """Use AI to generate a good Pexels search query based on the business profile."""
-    industry = ", ".join(profile.get("industry", []))
-    offerings = ", ".join(profile.get("offerings", []))
-
+    """Generate a Pexels stock photo search query from the business profile."""
+    industry = ", ".join(profile.get("industry", [])) or "business"
+    offerings = ", ".join(profile.get("offerings", [])) or ""
     topic_line = f"\nPost topic: {topic}" if topic else ""
 
-    prompt = f"""Generate a short Pexels stock photo search query (2-4 words) for a social media post.
-
-Business: {industry}
-Products/Services: {offerings}
-{topic_line}
-
-Output ONLY the search query, nothing else. Example: "coffee shop interior" or "team meeting office"."""
-
-    result = _call_claude(max_tokens=30, messages=[{"role": "user", "content": prompt}])
+    result = _call_claude(
+        max_tokens=30,
+        system="Output ONLY a short search query (2-4 words). No punctuation, no explanation.",
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Generate a Pexels stock photo search query for a social media post.\n"
+                f"Business: {industry}\n"
+                f"Products/Services: {offerings}"
+                f"{topic_line}"
+            ),
+        }],
+    )
     if result:
         return result.strip('"').strip("'")
     return " ".join(profile.get("industry", ["business"]))
@@ -201,10 +246,8 @@ async def fetch_stock_image(query: str) -> Optional[dict]:
                 logger.warning("No Pexels results for query: %s", query)
                 return None
 
-            # Pick first result
             import random
             photo = random.choice(photos[:3])
-            # Use medium size for social media (good quality, reasonable size)
             image_url = photo.get("src", {}).get("large2x") or photo.get("src", {}).get("original")
 
             return {
