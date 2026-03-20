@@ -6,6 +6,7 @@ Includes OAuth callback, media serving, payment redirect pages, and Stripe webho
 This is the SINGLE deployed service on Railway — all routes live here.
 """
 
+import asyncio
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -125,9 +126,19 @@ async def verify_webhook(request: Request):
     return Response(status_code=403)
 
 
+# Message deduplication — prevent processing the same message twice
+# (Meta retries webhooks if we don't return 200 fast enough)
+_processed_msg_ids: set[str] = set()
+_MSG_ID_MAX = 5000  # keep memory bounded
+
+
 @app.post("/webhook")
 async def receive_webhook(request: Request):
-    """Process incoming WhatsApp messages."""
+    """Process incoming WhatsApp messages.
+
+    Returns 200 immediately and processes messages in the background.
+    This prevents Meta from retrying webhooks when publish takes >5s.
+    """
     body = await request.json()
 
     entry = body.get("entry", [])
@@ -139,14 +150,29 @@ async def receive_webhook(request: Request):
             contacts = value.get("contacts", [])
 
             for i, msg in enumerate(messages):
+                msg_id = msg.get("id", "")
+
+                # Deduplicate — skip if we've already seen this message
+                if msg_id and msg_id in _processed_msg_ids:
+                    logger.debug("Skipping duplicate message: %s", msg_id)
+                    continue
+                if msg_id:
+                    _processed_msg_ids.add(msg_id)
+                    # Evict old IDs to prevent unbounded growth
+                    if len(_processed_msg_ids) > _MSG_ID_MAX:
+                        _processed_msg_ids.clear()
+
                 sender = msg.get("from", "")
                 contact_name = contacts[i]["profile"]["name"] if i < len(contacts) else ""
 
-                await handle_incoming_message(
-                    db=app.state.db,
-                    sender=sender,
-                    message=msg,
-                    contact_name=contact_name,
+                # Fire-and-forget: process in background so we return 200 immediately
+                asyncio.create_task(
+                    handle_incoming_message(
+                        db=app.state.db,
+                        sender=sender,
+                        message=msg,
+                        contact_name=contact_name,
+                    )
                 )
 
     return {"status": "ok"}
