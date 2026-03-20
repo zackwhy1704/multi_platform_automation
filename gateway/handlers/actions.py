@@ -247,11 +247,33 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             from gateway.media import is_video
 
             media_type = "video" if is_video(data.get("media_mime", "")) else "photo"
-            caption = await asyncio.to_thread(
-                generate_caption_for_media, platform, profile or {}, media_type=media_type
-            )
-            if not caption:
-                caption = "Check out our latest update!"
+            try:
+                caption = await asyncio.to_thread(
+                    generate_caption_for_media, platform, profile or {}, media_type=media_type
+                )
+            except Exception as e:
+                logger.error("Caption generation error for %s: %s", sender, e)
+                caption = None
+
+            if not caption or not caption.strip():
+                await wa.send_text(
+                    sender,
+                    "Caption generation failed. Please try again or write your own caption.",
+                )
+                await wa.send_interactive_buttons(
+                    sender,
+                    "How would you like to add a caption?",
+                    [
+                        {"id": "ai", "title": "Try Again"},
+                        {"id": "write_caption", "title": "Write My Own"},
+                    ],
+                )
+                return
+
+            caption = caption.strip()
+            # Show the generated caption FIRST so user can read it before being prompted to publish
+            await wa.send_text(sender, f"Here's your generated caption:\n\n{caption}")
+
         else:
             caption = text.strip()
             if not caption:
@@ -280,9 +302,27 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             await wa.send_text(sender, "Generating post...")
             profile = db.get_user_profile(sender)
             from services.ai.ai_service import generate_post
-            caption = await asyncio.to_thread(generate_post, platform, profile or {})
-            if not caption:
-                caption = "Exciting things happening at our business!"
+            try:
+                caption = await asyncio.to_thread(generate_post, platform, profile or {})
+            except Exception as e:
+                logger.error("Post generation error for %s: %s", sender, e)
+                caption = None
+
+            if not caption or not caption.strip():
+                await wa.send_text(
+                    sender,
+                    "Post generation failed. Please try again or write your own text.",
+                )
+                await wa.send_text(
+                    sender,
+                    "Write your Facebook post below.\n\n"
+                    "Or type *ai* to try generating again.",
+                )
+                return
+
+            caption = caption.strip()
+            # Show the generated post FIRST so user can read it before being prompted to publish
+            await wa.send_text(sender, f"Here's your generated post:\n\n{caption}")
         elif use_existing:
             caption = data["caption"]
         else:
@@ -474,15 +514,11 @@ async def _send_preview(sender: str, data: dict):
     else:
         await wa.send_text(sender, preview_header)
 
-    # Caption text
-    caption_text = f"*Caption:*\n{caption[:500]}"
-    if len(caption) > 500:
-        caption_text += "...(truncated)"
-    await wa.send_text(sender, caption_text)
-
+    # Caption preview + publish buttons in one message so nothing appears out of order
+    caption_preview = caption[:300] + ("..." if len(caption) > 300 else "")
     await wa.send_interactive_buttons(
         sender,
-        "Ready to publish?",
+        f"*Caption:*\n{caption_preview}\n\nReady to publish?",
         [
             {"id": "approve", "title": "Publish Now"},
             {"id": "edit", "title": "Edit Caption"},
