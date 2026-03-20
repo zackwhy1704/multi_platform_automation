@@ -79,10 +79,18 @@ def _call_claude(
     return None
 
 
+def _lang_instruction(language: str) -> str:
+    """Return a language instruction for AI generation."""
+    if language == "zh":
+        return " Write the entire post in Simplified Chinese (中文)."
+    return ""
+
+
 def generate_post(
     platform: str,
     profile: dict,
     topic: Optional[str] = None,
+    language: str = "en",
 ) -> Optional[str]:
     """Generate a social media post using Claude."""
     industry = ", ".join(profile.get("industry", [])) or "general business"
@@ -108,6 +116,7 @@ def generate_post(
         system=(
             "You are a social media content strategist. "
             "Output ONLY the post text — no preamble, no explanation, no labels."
+            + _lang_instruction(language)
         ),
         messages=[{
             "role": "user",
@@ -129,6 +138,7 @@ def generate_reply(
     original_post: str,
     comment: str,
     tone: str = "professional",
+    language: str = "en",
 ) -> Optional[str]:
     """Generate an AI reply to a comment."""
     return _call_claude(
@@ -136,6 +146,7 @@ def generate_reply(
         system=(
             "You are a community manager replying to comments on social media. "
             "Output ONLY the reply text — no preamble, no explanation."
+            + _lang_instruction(language)
         ),
         messages=[{
             "role": "user",
@@ -155,6 +166,7 @@ def generate_caption_for_media(
     profile: dict,
     media_type: str = "photo",
     topic: Optional[str] = None,
+    language: str = "en",
 ) -> Optional[str]:
     """Generate a caption for user-provided photo or video."""
     industry = ", ".join(profile.get("industry", [])) or "general business"
@@ -179,6 +191,7 @@ def generate_caption_for_media(
         system=(
             "You are a social media content strategist. "
             "Output ONLY the caption text — no preamble, no explanation, no labels."
+            + _lang_instruction(language)
         ),
         messages=[{
             "role": "user",

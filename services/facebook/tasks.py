@@ -149,7 +149,8 @@ def reply_task(self, phone_number_id: str, max_replies: int = 5):
                 if db.has_engaged_post(phone_number_id, "facebook", comment_id):
                     continue
 
-                reply_text = generate_reply("facebook", post_message, comment.get("message", ""), tone)
+                user_lang = db.get_display_language(phone_number_id)
+                reply_text = generate_reply("facebook", post_message, comment.get("message", ""), tone, language=user_lang)
                 if not reply_text:
                     continue
 

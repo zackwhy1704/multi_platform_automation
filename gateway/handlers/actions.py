@@ -24,6 +24,7 @@ from shared.database import BotDatabase
 from shared.credits import CreditManager, get_action_cost, ACTION_COSTS
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
+from gateway.i18n import get_language
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,8 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             media_type = "video" if is_video(data.get("media_mime", "")) else "photo"
             try:
                 caption = await asyncio.to_thread(
-                    generate_caption_for_media, platform, profile or {}, media_type=media_type
+                    generate_caption_for_media, platform, profile or {}, media_type=media_type,
+                    language=get_language()
                 )
             except Exception as e:
                 logger.error("Caption generation error for %s: %s", sender, e)
@@ -303,7 +305,7 @@ async def handle_post_step(db: BotDatabase, sender: str, text: str,
             profile = db.get_user_profile(sender)
             from services.ai.ai_service import generate_post
             try:
-                caption = await asyncio.to_thread(generate_post, platform, profile or {})
+                caption = await asyncio.to_thread(generate_post, platform, profile or {}, language=get_language())
             except Exception as e:
                 logger.error("Post generation error for %s: %s", sender, e)
                 caption = None
@@ -901,8 +903,9 @@ async def _generate_batch_posts(profile: dict, platform: str, content_type: str,
     from services.ai.ai_service import generate_post
 
     topic = custom_theme or None
+    lang = get_language()
     captions = await asyncio.gather(*[
-        asyncio.to_thread(generate_post, platform, profile, topic=topic)
+        asyncio.to_thread(generate_post, platform, profile, topic=topic, language=lang)
         for _ in range(count)
     ])
     return [
