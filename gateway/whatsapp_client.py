@@ -32,6 +32,9 @@ def _get_headers() -> dict:
 
 async def send_text(to: str, body: str) -> bool:
     """Send a plain text message to a WhatsApp number."""
+    from gateway.i18n import translate_text, get_language
+    if get_language() != "en":
+        body = translate_text(body)
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -47,6 +50,10 @@ async def send_interactive_buttons(to: str, body: str, buttons: list[dict]) -> b
 
     buttons: [{"id": "btn_1", "title": "Option 1"}, ...]
     """
+    from gateway.i18n import translate_text, translate_buttons, get_language
+    if get_language() != "en":
+        body = translate_text(body)
+        buttons = translate_buttons(buttons)
     btn_rows = [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in buttons[:3]]
     payload = {
         "messaging_product": "whatsapp",
@@ -67,6 +74,11 @@ async def send_interactive_list(to: str, body: str, button_text: str, sections: 
 
     sections: [{"title": "Section", "rows": [{"id": "row1", "title": "Item", "description": "..."}]}]
     """
+    from gateway.i18n import translate_text, translate_static, translate_list_sections, get_language
+    if get_language() != "en":
+        body = translate_text(body)
+        button_text = translate_static(button_text)
+        sections = translate_list_sections(sections)
     payload = {
         "messaging_product": "whatsapp",
         "to": to,

@@ -14,6 +14,7 @@ from shared.database import BotDatabase
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
 from gateway.handlers import onboarding, actions, subscription, settings
+from gateway.i18n import set_language
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ COMMANDS = {
     "settings": settings.handle_settings,
     "referral": subscription.handle_referral,
     "reset": settings.handle_reset,
+    "language": settings.handle_language,
 }
 
 STATE_HANDLERS = {
@@ -71,6 +73,8 @@ STATE_HANDLERS = {
     ConversationState.AWAITING_REPLY_PLATFORM: actions.handle_reply_step,
     # Credit packs
     ConversationState.AWAITING_PACK_CHOICE: subscription.handle_pack_step,
+    # Language
+    ConversationState.AWAITING_LANGUAGE: settings.handle_language_step,
 }
 
 # States that accept media messages (photo/video)
@@ -106,6 +110,10 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
     await wa.mark_as_read(msg_id)
     db.create_user(sender, phone_number=sender, display_name=contact_name)
     db.update_last_seen(sender)
+
+    # Set display language for this request
+    user_lang = db.get_display_language(sender)
+    set_language(user_lang)
 
     # --- Extract text from message ---
     text = ""
@@ -321,5 +329,6 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         "*settings* — View/update settings\n"
         "*subscribe* — Upgrade your plan\n"
         "*referral* — Get your referral code\n"
+        "*language* — Change display language\n"
         "*help* — Show all commands",
     )

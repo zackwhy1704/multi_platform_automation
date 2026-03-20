@@ -99,6 +99,50 @@ async def handle_reset(db: BotDatabase, sender: str, text: str):
     await wa.send_text(sender, "\n".join(lines))
 
 
+async def handle_language(db: BotDatabase, sender: str, text: str):
+    """Show language selection."""
+    current = db.get_display_language(sender)
+    current_label = "中文" if current == "zh" else "English"
+    await wa.send_interactive_buttons(
+        sender,
+        f"*Display Language / 显示语言*\n\n"
+        f"Current: {current_label}\n\n"
+        f"Choose your preferred language:\n选择您的首选语言：",
+        [
+            {"id": "lang_en", "title": "English"},
+            {"id": "lang_zh", "title": "中文"},
+        ],
+    )
+    db.set_conversation_state(sender, ConversationState.AWAITING_LANGUAGE, {})
+
+
+async def handle_language_step(
+    db: BotDatabase, sender: str, text: str,
+    state: ConversationState, data: dict, **kwargs,
+):
+    """Handle language selection."""
+    choice = text.lower().strip()
+    db.clear_conversation_state(sender)
+
+    if choice == "lang_en":
+        db.set_display_language(sender, "en")
+        await wa.send_text(sender, "Language set to *English*.\n\nAll messages will now be in English.")
+    elif choice == "lang_zh":
+        db.set_display_language(sender, "zh")
+        await wa.send_text(sender, "语言已设置为 *中文*。\n\n所有消息现在将以中文显示。")
+    else:
+        await wa.send_text(sender, "Please choose a language. / 请选择语言。")
+        await wa.send_interactive_buttons(
+            sender,
+            "Choose your preferred language:\n选择您的首选语言：",
+            [
+                {"id": "lang_en", "title": "English"},
+                {"id": "lang_zh", "title": "中文"},
+            ],
+        )
+        db.set_conversation_state(sender, ConversationState.AWAITING_LANGUAGE, {})
+
+
 async def handle_setup(db: BotDatabase, sender: str, text: str):
     """Start platform connection via Post For Me OAuth."""
     fb_token = db.get_platform_token(sender, "facebook")

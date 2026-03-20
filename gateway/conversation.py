@@ -46,3 +46,6 @@ class ConversationState(str, Enum):
 
     # Credit pack purchase
     AWAITING_PACK_CHOICE = "awaiting_pack_choice"
+
+    # Language selection
+    AWAITING_LANGUAGE = "awaiting_language"

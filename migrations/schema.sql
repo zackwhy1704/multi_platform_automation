@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS platform_tokens (
 -- Add pfm_profile_key column to existing installations
 ALTER TABLE platform_tokens ADD COLUMN IF NOT EXISTS pfm_profile_key VARCHAR(255);
 
+-- Add display_language column to users (default English)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_language VARCHAR(5) DEFAULT 'en';
+
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON platform_tokens(phone_number_id, platform);
 
 -- ============================================================================

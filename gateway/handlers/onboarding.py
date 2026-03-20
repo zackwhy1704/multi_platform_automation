@@ -501,6 +501,7 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
         "  disconnect — Switch account\n"
         "  referral — Get referral code\n"
         "  stats — View your stats\n"
+        "  language — Change display language\n"
         "  reset — Exit any current flow\n\n"
         "📷 *Quick post:* Just send a photo or video!\n\n"
         "_Send_ *reset* _at any time to exit a flow._",
