@@ -1003,10 +1003,10 @@ async def test_manual_setup_flow(client: httpx.AsyncClient):
             cur.execute("SELECT state FROM conversation_state WHERE phone_number_id = %s", (TEST_PHONE,))
             conv = cur.fetchone()
             conn.close()
-            if conv and conv["state"] == "setup_manual_choose":
-                test_pass("State is 'setup_manual_choose' → OAuth URL shown with manual fallback button")
+            if conv and conv["state"] == "setup_platform":
+                test_pass("State is 'setup_platform' → platform selection shown (Facebook / Instagram)")
             elif conv:
-                test_fail(f"Expected state 'setup_manual_choose', got '{conv['state']}'",
+                test_fail(f"Expected state 'setup_platform', got '{conv['state']}'",
                           "Code may not be deployed yet — push to Railway")
             else:
                 test_fail("No conversation state found after 'setup'",
