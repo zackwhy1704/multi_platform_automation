@@ -206,7 +206,7 @@ def _clear_state():
     conn.close()
 
 
-def _get_state() -> dict | None:
+def _get_state():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     cur = conn.cursor()
     cur.execute(
