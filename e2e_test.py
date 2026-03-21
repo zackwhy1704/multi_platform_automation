@@ -1354,6 +1354,7 @@ async def test_commands_all_respond(client: httpx.AsyncClient):
         "help", "post", "schedule", "reply",
         "stats", "credits", "subscribe", "buy", "setup",
         "disconnect", "settings", "referral", "language", "cancel", "reset",
+        "ai image", "ai video",
     ]
 
     for i, cmd in enumerate(commands):

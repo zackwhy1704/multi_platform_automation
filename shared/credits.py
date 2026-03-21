@@ -39,6 +39,9 @@ ACTION_COSTS = {
     "scheduled_own_media": 5,
     # Beautify caption with AI (vision + profile context)
     "beautify_caption": 2,
+    # AI content generation
+    "ai_image": 10,
+    "ai_video": 30,
     # Comment auto-reply
     "comment_reply": 2,
     # Legacy (backwards compat)

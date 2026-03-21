@@ -488,12 +488,14 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
         "📝 *Content*\n"
         f"  post — Create a post ({ACTION_COSTS['text_post']}–{ACTION_COSTS['own_media_post']} credits)\n"
         "  schedule — Schedule a post for later\n"
-        f"  reply — Auto-reply to comments ({ACTION_COSTS['comment_reply']} credits)\n\n"
+        f"  reply — Auto-reply to comments ({ACTION_COSTS['comment_reply']} credits)\n"
+        f"  ai image — Generate an AI image ({ACTION_COSTS['ai_image']} credits)\n"
+        f"  ai video — Generate an AI video ({ACTION_COSTS['ai_video']} credits)\n\n"
         "💳 *Credits & Plans*\n"
         "  credits — Check balance\n"
         "  buy — Buy credit packs\n"
         "  subscribe — View subscription plans\n"
-        "  cancel — Manage / cancel subscription\n\n"
+        "  cancel — Cancel subscription\n\n"
         "⚙️ *Account*\n"
         "  setup — Connect Facebook / Instagram\n"
         "  settings — View / update profile\n"
@@ -501,8 +503,7 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
         "  referral — Get referral code\n"
         "  stats — View your stats\n"
         "  language — Change display language\n"
-        "  reset — Exit any current flow\n\n"
-        "📷 *Quick post:* Just send a photo or video!\n\n"
+        "  reset — Refresh / use when facing any issues\n\n"
         "_Send_ *reset* _at any time to exit a flow._",
     )
 

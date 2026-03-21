@@ -38,6 +38,8 @@ COMMANDS = {
     "referral": subscription.handle_referral,
     "reset": settings.handle_reset,
     "language": settings.handle_language,
+    "ai image": actions.handle_ai_image,
+    "ai video": actions.handle_ai_video,
 }
 
 STATE_HANDLERS = {
@@ -67,7 +69,25 @@ STATE_HANDLERS = {
     ConversationState.AWAITING_PACK_CHOICE: subscription.handle_pack_step,
     # Language
     ConversationState.AWAITING_LANGUAGE: settings.handle_language_step,
+    # AI content generation
+    ConversationState.AWAITING_AI_IMAGE_PROMPT: actions.handle_ai_content_step,
+    ConversationState.AWAITING_AI_VIDEO_PROMPT: actions.handle_ai_content_step,
+    ConversationState.AWAITING_AI_VIDEO_LENGTH: actions.handle_ai_content_step,
 }
+
+def _match_command(text: str):
+    """Match text against known commands, supporting multi-word commands like 'ai image'."""
+    lower = text.lower().strip()
+    # Check multi-word commands first (longest match)
+    for cmd in sorted(COMMANDS, key=len, reverse=True):
+        if " " in cmd and lower.startswith(cmd):
+            return cmd
+    # Single-word commands
+    first_word = lower.split()[0] if lower else ""
+    if first_word in COMMANDS:
+        return first_word
+    return None
+
 
 # States that accept media messages (photo/video)
 MEDIA_ACCEPTING_STATES = {
@@ -174,10 +194,10 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
             return
 
         # If user types a known command while in a flow, auto-cancel and run it
-        if text and text.lower().split()[0] in COMMANDS:
-            cmd_word = text.lower().split()[0]
+        cmd_match = _match_command(text) if text else None
+        if cmd_match:
             db.clear_conversation_state(sender)
-            handler_fn = COMMANDS[cmd_word]
+            handler_fn = COMMANDS[cmd_match]
             await handler_fn(db=db, sender=sender, text=text)
             return
 
@@ -217,71 +237,6 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
 
     # No active conversation state — handle as command or new message
 
-    # If user sent media without being in a flow, offer to create a post
-    if media_info and not text:
-        profile = db.get_user_profile(sender)
-        if not profile:
-            await onboarding.handle_start(db=db, sender=sender, text="")
-            return
-
-        # Auto-start posting flow with this media
-        fb_token = db.get_platform_token(sender, "facebook")
-        ig_token = db.get_platform_token(sender, "instagram")
-
-        if not fb_token and not ig_token:
-            await wa.send_text(
-                sender,
-                "Nice photo/video! To post it, first connect your account.\n"
-                "Send *setup* to connect Facebook or Instagram.",
-            )
-            return
-
-        # Step 1: Upload media directly to WhatsApp so it renders instantly in the chat.
-        from gateway.media import is_video as _is_video, get_media_public_url
-        from shared.config import PUBLIC_BASE_URL
-        is_vid = _is_video(media_info["mime_type"])
-        media_type = "video" if is_vid else "photo"
-        file_path = media_info.get("file_path", "")
-        mime = media_info["mime_type"]
-
-        if is_vid:
-            sent = await wa.send_video(sender, "", file_path=file_path, mime_type=mime)
-        else:
-            sent = await wa.send_image(sender, "", file_path=file_path, mime_type=mime)
-
-        if not sent and PUBLIC_BASE_URL:
-            preview_url = get_media_public_url(media_info["filename"], PUBLIC_BASE_URL)
-            sent = await wa.send_video(sender, preview_url) if is_vid else await wa.send_image(sender, preview_url)
-
-        data = {
-            "media_filename": media_info["filename"],
-            "media_mime": media_info["mime_type"],
-            "post_type": "own_media",
-        }
-
-        # Step 2: If both platforms are connected, we need platform selection first.
-        # User taps platform button → that confirms they saw the preview → then caption.
-        if fb_token and ig_token:
-            db.set_conversation_state(sender, ConversationState.AWAITING_POST_PLATFORM, data)
-            await wa.send_interactive_buttons(
-                sender,
-                f"Your {media_type} is ready! Which platform do you want to post it on?",
-                [
-                    {"id": "facebook", "title": "Facebook"},
-                    {"id": "instagram", "title": "Instagram"},
-                ],
-            )
-        else:
-            # Single platform — caption choice buttons confirm they saw the preview.
-            data["platform"] = "facebook" if fb_token else "instagram"
-            platform_label = "Facebook" if fb_token else "Instagram"
-            db.set_conversation_state(sender, ConversationState.AWAITING_POST_CAPTION, data)
-            await wa.send_text(
-                sender,
-                f"Your {media_type} is ready for {platform_label}! Type your caption below:",
-            )
-        return
-
     if not text:
         await wa.send_text(
             sender,
@@ -291,13 +246,13 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         return
 
     # Check if new user (no profile) — auto-start onboarding
-    command_word = text.lower().split()[0] if text else ""
+    command_word = _match_command(text) if text else None
     profile = db.get_user_profile(sender)
     if not profile and command_word not in ("start", "help"):
         await onboarding.handle_start(db=db, sender=sender, text=text)
         return
 
-    handler = COMMANDS.get(command_word)
+    handler = COMMANDS.get(command_word) if command_word else None
     if handler:
         await handler(db=db, sender=sender, text=text)
         return
@@ -308,6 +263,8 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         "*post* — Create a post (photo/video/text)\n"
         "*schedule* — Schedule a post\n"
         "*reply* — Auto-reply to comments\n"
+        "*ai image* — Generate an AI image\n"
+        "*ai video* — Generate an AI video\n"
         "*stats* — View your stats\n"
         "*credits* — Check credit balance\n"
         "*buy* — Purchase credit packs\n"

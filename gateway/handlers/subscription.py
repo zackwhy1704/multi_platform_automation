@@ -75,6 +75,8 @@ async def handle_credits(db: BotDatabase, sender: str, text: str):
         f"  Text post: {ACTION_COSTS['text_post']} credits\n"
         f"  Photo/Video post: {ACTION_COSTS['own_media_post']} credits\n"
         f"  Beautify with AI: {ACTION_COSTS['beautify_caption']} credits\n"
+        f"  AI Image: {ACTION_COSTS['ai_image']} credits\n"
+        f"  AI Video: {ACTION_COSTS['ai_video']} credits\n"
         f"  Comment reply: {ACTION_COSTS['comment_reply']} credits\n\n"
         + ("Credits reset on your next billing cycle." if is_sub else
            "Want more credits?\n"

@@ -674,3 +674,165 @@ async def handle_stats(db: BotDatabase, sender: str, text: str):
     balance = cm.get_balance(sender)
     lines.append(f"\n*Credits remaining:* {balance}")
     await wa.send_text(sender, "\n".join(lines))
+
+
+# ===========================================================================
+# AI IMAGE & AI VIDEO
+# ===========================================================================
+
+async def handle_ai_image(db: BotDatabase, sender: str, text: str):
+    """Start AI image generation flow."""
+    if not await _check_credits(db, sender, "ai_image"):
+        return
+
+    cost = ACTION_COSTS.get("ai_image", 10)
+    await wa.send_text(
+        sender,
+        f"*AI Image Generation* 🎨\n\n"
+        f"Cost: *{cost} credits* per image\n\n"
+        f"⚠️ *Note:* Credits will be deducted once generation starts, "
+        f"even if you're not satisfied with the result.\n\n"
+        f"Type your image prompt below — describe what you want to see:",
+    )
+    db.set_conversation_state(sender, ConversationState.AWAITING_AI_IMAGE_PROMPT, {})
+
+
+async def handle_ai_video(db: BotDatabase, sender: str, text: str):
+    """Start AI video generation flow."""
+    if not await _check_credits(db, sender, "ai_video"):
+        return
+
+    cost = ACTION_COSTS.get("ai_video", 30)
+    await wa.send_text(
+        sender,
+        f"*AI Video Generation* 🎬\n\n"
+        f"Cost: *{cost} credits* per video\n\n"
+        f"⚠️ *Note:* Credits will be deducted once generation starts, "
+        f"even if you're not satisfied with the result.\n\n"
+        f"Type your video prompt below — describe the scene you want:",
+    )
+    db.set_conversation_state(sender, ConversationState.AWAITING_AI_VIDEO_PROMPT, {})
+
+
+async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
+                                  state: ConversationState, data: dict, **kwargs):
+    """Handle AI image/video generation states."""
+
+    if state == ConversationState.AWAITING_AI_IMAGE_PROMPT:
+        if not text.strip():
+            await wa.send_text(sender, "Please type a description for the image you want to generate.")
+            return
+
+        data["prompt"] = text.strip()
+        db.clear_conversation_state(sender)
+
+        # Deduct credits before generation
+        cm = CreditManager(db)
+        if not cm.deduct(sender, "ai_image", "ai"):
+            await wa.send_text(sender, "Insufficient credits. Send *credits* for details.")
+            return
+
+        balance = cm.get_balance(sender)
+        await wa.send_text(
+            sender,
+            f"Generating your image... This may take a moment.\n"
+            f"Credits used: *{get_action_cost('ai_image')}* | Remaining: *{balance}*",
+        )
+
+        # Generate image
+        from services.ai.image_generator import generate_image
+        try:
+            image_url = await asyncio.to_thread(generate_image, data["prompt"])
+        except Exception as e:
+            logger.error("AI image generation error for %s: %s", sender, e)
+            image_url = None
+
+        if image_url:
+            sent = await wa.send_image(sender, image_url, caption="Here's your AI-generated image!")
+            if not sent:
+                await wa.send_text(sender, f"Your image is ready:\n{image_url}")
+        else:
+            await wa.send_text(
+                sender,
+                "❌ Image generation failed. Your credits have been used.\n\n"
+                "Send *ai image* to try again with a different prompt.",
+            )
+
+    elif state == ConversationState.AWAITING_AI_VIDEO_PROMPT:
+        if not text.strip():
+            await wa.send_text(sender, "Please type a description for the video you want to generate.")
+            return
+
+        data["prompt"] = text.strip()
+        db.set_conversation_state(sender, ConversationState.AWAITING_AI_VIDEO_LENGTH, data)
+
+        await wa.send_interactive_list(
+            sender,
+            "Choose the video length:",
+            "Select Length",
+            [{
+                "title": "Video Length",
+                "rows": [
+                    {"id": "vlen_5", "title": "5 seconds", "description": "Quick clip"},
+                    {"id": "vlen_10", "title": "10 seconds", "description": "Short video"},
+                ],
+            }],
+        )
+
+    elif state == ConversationState.AWAITING_AI_VIDEO_LENGTH:
+        choice = text.lower().strip()
+
+        duration_map = {
+            "vlen_5": "5",
+            "vlen_10": "10",
+        }
+        duration = duration_map.get(choice)
+        if not duration:
+            await wa.send_interactive_list(
+                sender,
+                "Please select a valid video length:",
+                "Select Length",
+                [{
+                    "title": "Video Length",
+                    "rows": [
+                        {"id": "vlen_5", "title": "5 seconds", "description": "Quick clip"},
+                        {"id": "vlen_10", "title": "10 seconds", "description": "Short video"},
+                    ],
+                }],
+            )
+            return
+
+        db.clear_conversation_state(sender)
+
+        # Deduct credits before generation
+        cm = CreditManager(db)
+        if not cm.deduct(sender, "ai_video", "ai"):
+            await wa.send_text(sender, "Insufficient credits. Send *credits* for details.")
+            return
+
+        balance = cm.get_balance(sender)
+        await wa.send_text(
+            sender,
+            f"Generating your {duration}s video... This may take 1-3 minutes.\n"
+            f"Credits used: *{get_action_cost('ai_video')}* | Remaining: *{balance}*",
+        )
+
+        # Generate video
+        from services.ai.video_generator import generate_video
+        try:
+            result = await generate_video(data["prompt"], duration=duration)
+        except Exception as e:
+            logger.error("AI video generation error for %s: %s", sender, e)
+            result = None
+
+        if result and result.get("url"):
+            video_url = result["url"]
+            sent = await wa.send_video(sender, video_url, caption="Here's your AI-generated video!")
+            if not sent:
+                await wa.send_text(sender, f"Your video is ready:\n{video_url}")
+        else:
+            await wa.send_text(
+                sender,
+                "❌ Video generation failed. Your credits have been used.\n\n"
+                "Send *ai video* to try again with a different prompt.",
+            )

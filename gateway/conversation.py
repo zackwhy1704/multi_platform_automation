@@ -41,3 +41,8 @@ class ConversationState(str, Enum):
 
     # Language selection
     AWAITING_LANGUAGE = "awaiting_language"
+
+    # AI content generation
+    AWAITING_AI_IMAGE_PROMPT = "awaiting_ai_image_prompt"
+    AWAITING_AI_VIDEO_PROMPT = "awaiting_ai_video_prompt"
+    AWAITING_AI_VIDEO_LENGTH = "awaiting_ai_video_length"

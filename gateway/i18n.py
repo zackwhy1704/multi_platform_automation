@@ -60,6 +60,9 @@ ZH_STATIC = {
     "Discard": "放弃",
     "English": "English",
     "中文": "中文",
+    "Select Length": "选择长度",
+    "5 seconds": "5 秒",
+    "10 seconds": "10 秒",
 
     # List section titles
     "Plans": "方案",
