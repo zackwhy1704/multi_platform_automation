@@ -331,7 +331,7 @@ def _handle_payment_failed(invoice):
                 f"Payment Failed\n\n"
                 f"Please update your payment method.\n"
                 f"Retry on: {retry_date}\n\n"
-                "Send *cancel* to manage your subscription.",
+                "Send *cancel subscription* to manage your subscription.",
             )
         else:
             db.deactivate_subscription(phone)

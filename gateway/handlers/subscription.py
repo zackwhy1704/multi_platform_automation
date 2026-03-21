@@ -97,7 +97,7 @@ async def handle_subscribe(db: BotDatabase, sender: str, text: str):
             sender,
             f"You already have an active subscription!\n"
             f"Credits remaining: *{balance}*\n\n"
-            f"Send *cancel* to manage your subscription.",
+            f"Send *cancel subscription* to manage your subscription.",
         )
         return
 

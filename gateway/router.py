@@ -31,7 +31,7 @@ COMMANDS = {
     "credits": subscription.handle_credits,
     "subscribe": subscription.handle_subscribe,
     "buy": subscription.handle_buy_credits,
-    "cancel": subscription.handle_cancel,
+    "cancel subscription": subscription.handle_cancel,
     "setup": settings.handle_setup,
     "disconnect": settings.handle_disconnect,
     "settings": settings.handle_settings,
@@ -272,7 +272,9 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         "*disconnect* — Switch/remove account\n"
         "*settings* — View/update settings\n"
         "*subscribe* — Upgrade your plan\n"
+        "*cancel subscription* — Cancel subscription\n"
         "*referral* — Get your referral code\n"
         "*language* — Change display language\n"
+        "*reset* — Refresh / use when facing any issues\n"
         "*help* — Show all commands",
     )
