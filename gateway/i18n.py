@@ -63,10 +63,6 @@ ZH_STATIC = {
     "Select Length": "选择长度",
     "5 seconds": "5 秒",
     "10 seconds": "10 秒",
-    "15 seconds": "15 秒",
-    "20 seconds": "20 秒",
-    "25 seconds": "25 秒",
-    "30 seconds": "30 秒",
 
     # List section titles
     "Plans": "方案",

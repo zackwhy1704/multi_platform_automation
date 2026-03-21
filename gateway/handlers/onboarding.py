@@ -503,7 +503,8 @@ async def handle_help(db: BotDatabase, sender: str, text: str):
         "  referral — Get referral code\n"
         "  stats — View your stats\n"
         "  language — Change display language\n"
-        "  reset — Refresh / use when facing any issues",
+        "  reset — Refresh / use when facing any issues\n\n"
+        "⚠️ Due to WhatsApp limitations, our server may have issues loading if messages are sent back-to-back or too long after command prompts. If unresponsive, send *reset* and retry.",
     )
 
 

@@ -768,17 +768,13 @@ async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
 
         await wa.send_interactive_list(
             sender,
-            "Choose the video length:",
+            "Choose the video length:\n\n_(Limited to 5s and 10s — longer videos may have issues loading)_",
             "Select Length",
             [{
                 "title": "Video Length",
                 "rows": [
                     {"id": "vlen_5", "title": "5 seconds", "description": "Quick clip"},
                     {"id": "vlen_10", "title": "10 seconds", "description": "Standard"},
-                    {"id": "vlen_15", "title": "15 seconds", "description": "2 clips combined"},
-                    {"id": "vlen_20", "title": "20 seconds", "description": "2 clips combined"},
-                    {"id": "vlen_25", "title": "25 seconds", "description": "3 clips combined"},
-                    {"id": "vlen_30", "title": "30 seconds", "description": "3 clips combined"},
                 ],
             }],
         )
@@ -789,10 +785,6 @@ async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
         duration_map = {
             "vlen_5": 5,
             "vlen_10": 10,
-            "vlen_15": 15,
-            "vlen_20": 20,
-            "vlen_25": 25,
-            "vlen_30": 30,
         }
         duration = duration_map.get(choice)
         if not duration:
@@ -805,10 +797,6 @@ async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
                     "rows": [
                         {"id": "vlen_5", "title": "5 seconds", "description": "Quick clip"},
                         {"id": "vlen_10", "title": "10 seconds", "description": "Standard"},
-                        {"id": "vlen_15", "title": "15 seconds", "description": "2 clips combined"},
-                        {"id": "vlen_20", "title": "20 seconds", "description": "2 clips combined"},
-                        {"id": "vlen_25", "title": "25 seconds", "description": "3 clips combined"},
-                        {"id": "vlen_30", "title": "30 seconds", "description": "3 clips combined"},
                     ],
                 }],
             )
@@ -824,49 +812,23 @@ async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
 
         balance = cm.get_balance(sender)
 
-        # Split duration into Kling-supported chunks (5s or 10s)
-        clips_needed = []
-        remaining = duration
-        while remaining > 0:
-            chunk = min(remaining, 10)
-            if chunk < 5:
-                chunk = 5
-            clips_needed.append(str(chunk))
-            remaining -= chunk
-
-        clip_count = len(clips_needed)
-        est_time = clip_count * 3  # ~3 min per clip
-
         await wa.send_text(
             sender,
-            f"Generating your {duration}s video"
-            + (f" ({clip_count} clips)..." if clip_count > 1 else "...")
-            + f" This may take {est_time}-{est_time + 2} minutes.\n"
+            f"Generating your {duration}s video... This may take 3-5 minutes.\n"
             f"Credits used: *{get_action_cost('ai_video')}* | Remaining: *{balance}*",
         )
 
-        # Generate video clip(s)
         from services.ai.video_generator import generate_video
-        results = []
-        for i, chunk_dur in enumerate(clips_needed):
-            try:
-                result = await generate_video(data["prompt"], duration=chunk_dur)
-                if result and result.get("url"):
-                    results.append(result)
-            except Exception as e:
-                logger.error("AI video clip %d error for %s: %s", i, sender, e)
+        try:
+            result = await generate_video(data["prompt"], duration=str(duration))
+        except Exception as e:
+            logger.error("AI video error for %s: %s", sender, e)
+            result = None
 
-        if results:
-            for i, result in enumerate(results):
-                video_url = result["url"]
-                caption = (
-                    "Here's your AI-generated video!"
-                    if len(results) == 1
-                    else f"Clip {i + 1} of {len(results)}"
-                )
-                sent = await wa.send_video(sender, video_url, caption=caption)
-                if not sent:
-                    await wa.send_text(sender, f"Video clip {i + 1}:\n{video_url}")
+        if result and result.get("url"):
+            sent = await wa.send_video(sender, result["url"], caption="Here's your AI-generated video!")
+            if not sent:
+                await wa.send_text(sender, f"Here's your AI-generated video:\n{result['url']}")
         else:
             await wa.send_text(
                 sender,
