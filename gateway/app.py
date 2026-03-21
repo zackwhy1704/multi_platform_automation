@@ -84,6 +84,68 @@ def _run_migrations(database: BotDatabase):
             logger.warning("Migration skipped: %s — %s", sql[:60], e)
 
 
+async def _subscription_sync_loop():
+    """Background task: sync Stripe subscriptions and reset credits for renewals.
+
+    Runs every 6 hours. For each user with an active subscription:
+    - Verify subscription is still active in Stripe
+    - Reset credits if the billing period has renewed since last reset
+    - Deactivate subscriptions that Stripe shows as cancelled/past_due
+    """
+    while True:
+        try:
+            await asyncio.sleep(6 * 3600)  # Run every 6 hours
+            logger.info("Subscription sync: starting periodic check...")
+
+            rows = db.execute_query(
+                "SELECT phone_number_id, stripe_subscription_id, stripe_customer_id, "
+                "credits_reset_at FROM users WHERE subscription_active = TRUE "
+                "AND stripe_subscription_id IS NOT NULL",
+                fetch="all",
+            )
+            if not rows:
+                logger.info("Subscription sync: no active subscriptions found")
+                continue
+
+            synced = 0
+            for row in rows:
+                phone = row["phone_number_id"]
+                sub_id = row["stripe_subscription_id"]
+                try:
+                    sub = stripe.Subscription.retrieve(sub_id)
+                    status = sub.get("status") if isinstance(sub, dict) else getattr(sub, "status", None)
+
+                    if status in ("canceled", "unpaid", "past_due", "incomplete_expired"):
+                        db.deactivate_subscription(phone)
+                        await _notify_whatsapp(phone, "Your subscription has ended.\nSend *subscribe* to resubscribe.")
+                        logger.info("Subscription sync: deactivated %s (status=%s)", phone, status)
+                        synced += 1
+                        continue
+
+                    if status == "active":
+                        # Check if credits need resetting (period renewed since last reset)
+                        period_end = _get_subscription_period_end(sub)
+                        reset_at = row.get("credits_reset_at")
+                        if period_end and reset_at:
+                            period_start = period_end - 30 * 86400  # approximate
+                            if reset_at.timestamp() < period_start:
+                                plan_credits = _get_plan_credits(sub)
+                                cm = CreditManager(db)
+                                cm.reset_credits(phone, plan_credits)
+                                logger.info("Subscription sync: reset credits for %s (%d credits)", phone, plan_credits)
+                                synced += 1
+
+                except Exception as e:
+                    logger.warning("Subscription sync error for %s: %s", phone, e)
+
+            logger.info("Subscription sync: done. Synced %d/%d users.", synced, len(rows))
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error("Subscription sync loop error: %s", e, exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db
@@ -92,7 +154,17 @@ async def lifespan(app: FastAPI):
     logger.info("Gateway started — database pool ready")
     _run_migrations(db)
     _seed_defaults(db)
+
+    # Start background subscription sync task
+    sync_task = asyncio.create_task(_subscription_sync_loop())
+
     yield
+
+    sync_task.cancel()
+    try:
+        await sync_task
+    except asyncio.CancelledError:
+        pass
     db.close()
     logger.info("Gateway shutdown — pool closed")
 
@@ -735,7 +807,7 @@ def _get_plan_credits(subscription) -> int:
     return PLANS["pro"]["credits"]  # default to pro (500)
 
 
-def _get_subscription_period_end(subscription) -> int | None:
+def _get_subscription_period_end(subscription):
     """Get current_period_end from Stripe subscription (handles old + new API)."""
     period_end = getattr(subscription, "current_period_end", None)
     if period_end is None:

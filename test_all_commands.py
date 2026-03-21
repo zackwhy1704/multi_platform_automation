@@ -101,10 +101,10 @@ MULTI_STEP_FLOWS = {
         ("text", "ai image", "awaiting_ai_image_prompt"),
         # Don't actually generate (costs credits) — just verify state was set
     ],
-    "ai video → enter prompt → select length": [
+    "ai video → enter prompt → select length (5s)": [
         ("text", "ai video", "awaiting_ai_video_prompt"),
         ("text", "a beautiful sunset over the ocean", "awaiting_ai_video_length"),
-        # Don't select length (would cost 30 credits)
+        # Don't actually generate (costs 30 credits) — just verify length picker appears
     ],
     "language → select english": [
         ("text", "language", "awaiting_language"),

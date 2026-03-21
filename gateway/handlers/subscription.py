@@ -144,10 +144,13 @@ async def handle_buy_credits(db: BotDatabase, sender: str, text: str):
     for pack in CREDIT_PACKS:
         price_id = PACK_PRICE_IDS.get(pack["credits"], "")
         if price_id:
+            # WhatsApp row title max = 24 chars — keep short
+            credits_label = f"{pack['credits']:,}"
+            title = f"{credits_label} — S${pack['price_usd']}"
             rows.append({
                 "id": f"pack_{pack['credits']}",
-                "title": f"{pack['label']} — S${pack['price_usd']}",
-                "description": f"S${pack['price_usd']:.2f} one-time",
+                "title": title[:24],
+                "description": f"{pack['label']}, one-time",
             })
 
     if not rows:

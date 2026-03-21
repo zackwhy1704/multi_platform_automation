@@ -86,61 +86,67 @@ async def generate_video(
     }
 
     try:
+        # Step 1: Submit the task
         async with httpx.AsyncClient(timeout=30) as client:
-            # Step 1: Submit the task
             resp = await client.post(
                 f"{KLING_API_BASE}/videos/text2video",
                 json=payload,
                 headers=headers,
             )
 
-            if resp.status_code != 200:
-                logger.error("Kling API task submission failed: %s %s", resp.status_code, resp.text)
-                return None
-
-            data = resp.json().get("data", {})
-            task_id = data.get("task_id")
-            if not task_id:
-                logger.error("No task_id in Kling response: %s", resp.json())
-                return None
-
-            logger.info("Kling video task submitted: %s (prompt: %s...)", task_id, prompt[:50])
-
-            # Step 2: Poll for completion (max ~3 minutes)
-            for attempt in range(36):  # 36 × 5s = 3 minutes
-                await _async_sleep(5)
-
-                status_resp = await client.get(
-                    f"{KLING_API_BASE}/videos/text2video/{task_id}",
-                    headers=headers,
-                )
-
-                if status_resp.status_code != 200:
-                    continue
-
-                status_data = status_resp.json().get("data", {})
-                task_status = status_data.get("task_status")
-
-                if task_status == "succeed":
-                    works = status_data.get("task_result", {}).get("videos", [])
-                    if works:
-                        video_url = works[0].get("url")
-                        logger.info("Kling video ready: %s", video_url[:80] if video_url else "no url")
-                        return {
-                            "url": video_url,
-                            "task_id": task_id,
-                            "duration": f"{duration}s",
-                        }
-
-                elif task_status == "failed":
-                    error_msg = status_data.get("task_status_msg", "Unknown error")
-                    logger.error("Kling video generation failed: %s", error_msg)
-                    return None
-
-                # Still processing — continue polling
-
-            logger.error("Kling video generation timed out after 3 minutes (task: %s)", task_id)
+        if resp.status_code != 200:
+            logger.error("Kling API task submission failed: %s %s", resp.status_code, resp.text)
             return None
+
+        data = resp.json().get("data", {})
+        task_id = data.get("task_id")
+        if not task_id:
+            logger.error("No task_id in Kling response: %s", resp.json())
+            return None
+
+        logger.info("Kling video task submitted: %s (prompt: %s...)", task_id, prompt[:50])
+
+        # Step 2: Poll for completion (max ~5 minutes)
+        for attempt in range(60):  # 60 × 5s = 5 minutes
+            await _async_sleep(5)
+
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    status_resp = await client.get(
+                        f"{KLING_API_BASE}/videos/text2video/{task_id}",
+                        headers=headers,
+                    )
+            except Exception as poll_err:
+                logger.warning("Kling poll attempt %d failed: %s", attempt, poll_err)
+                continue
+
+            if status_resp.status_code != 200:
+                logger.warning("Kling poll status %d on attempt %d", status_resp.status_code, attempt)
+                continue
+
+            status_data = status_resp.json().get("data", {})
+            task_status = status_data.get("task_status")
+
+            if task_status == "succeed":
+                works = status_data.get("task_result", {}).get("videos", [])
+                if works:
+                    video_url = works[0].get("url")
+                    logger.info("Kling video ready: %s", video_url[:80] if video_url else "no url")
+                    return {
+                        "url": video_url,
+                        "task_id": task_id,
+                        "duration": f"{duration}s",
+                    }
+
+            elif task_status == "failed":
+                error_msg = status_data.get("task_status_msg", "Unknown error")
+                logger.error("Kling video generation failed: %s", error_msg)
+                return None
+
+            # Still processing — continue polling
+
+        logger.error("Kling video generation timed out after 5 minutes (task: %s)", task_id)
+        return None
 
     except Exception as e:
         logger.error("Kling video generation error: %s", e)
