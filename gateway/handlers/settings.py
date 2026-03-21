@@ -148,18 +148,7 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
     fb_token = db.get_platform_token(sender, "facebook")
     ig_token = db.get_platform_token(sender, "instagram")
 
-    status = ""
-    if fb_token:
-        fb_label = _account_label(fb_token, "facebook")
-        ig_label = _account_label(ig_token, "instagram") if ig_token else "Not linked"
-        status = (
-            f"*Currently connected:*\n"
-            f"  Facebook: *{fb_label}*\n"
-            f"  Instagram: *{ig_label}*\n\n"
-            f"Tap below to *switch account* or reconnect.\n\n"
-        )
-
-    from services.publisher import generate_auth_url, get_connected_accounts
+    from services.publisher import get_connected_accounts
 
     # If already connected, verify the stored key is still valid
     if fb_token:
@@ -168,39 +157,74 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
             accounts = await get_connected_accounts(sender)
             live_ids = {a.get("id") for a in accounts}
             if pfm_key not in live_ids:
-                # Key exists in DB but not in PFM — clear it and reconnect
                 logger.warning("Stale PFM key for %s — clearing and reconnecting", sender)
                 db.delete_platform_token(sender, "facebook")
                 db.delete_platform_token(sender, "instagram")
                 fb_token = None
                 ig_token = None
-                status = ""
                 await wa.send_text(
                     sender,
                     "⚠️ Your previous connection has expired. Let's reconnect now.\n",
                 )
 
-    result = await generate_auth_url(sender, "facebook")
+    # Show current status and let user choose which platform to connect
+    lines = []
+    if fb_token or ig_token:
+        lines.append("*Currently connected:*")
+        fb_label = _account_label(fb_token, "facebook") if fb_token else "Not connected"
+        ig_label = _account_label(ig_token, "instagram") if ig_token else "Not connected"
+        lines.append(f"  Facebook: *{fb_label}*")
+        lines.append(f"  Instagram: *{ig_label}*")
+        lines.append("")
+
+    lines.append("Which platform would you like to connect?")
+
+    await wa.send_interactive_buttons(
+        sender,
+        "\n".join(lines),
+        [
+            {"id": "setup_facebook", "title": "Facebook"},
+            {"id": "setup_instagram", "title": "Instagram"},
+        ],
+    )
+    db.set_conversation_state(sender, ConversationState.SETUP_PLATFORM, {"action": "choose_platform"})
+
+
+async def _send_auth_url(sender: str, platform: str):
+    """Generate and send the OAuth URL for a specific platform."""
+    from services.publisher import generate_auth_url
+
+    result = await generate_auth_url(sender, platform)
     if result.get("success"):
         connect_url = result["url"]
-        await wa.send_text(
-            sender,
-            f"{status}"
-            f"*Connect your Facebook & Instagram*\n\n"
-            f"Tap the link below, log in with Facebook, and select your Page:\n\n"
-            f"{connect_url}\n\n"
-            f"_Works for any Facebook account — no app approval needed._\n\n"
-            f"You'll receive an automatic confirmation here once connected.\n"
-            f"Or tap *Done* below to check manually.",
-        )
+        platform_label = "Facebook" if platform == "facebook" else "Instagram"
+        if platform == "facebook":
+            instructions = (
+                f"*Connect your {platform_label}*\n\n"
+                f"Tap the link below, log in with Facebook, and select your Page:\n\n"
+                f"{connect_url}\n\n"
+                f"_Works for any Facebook account — no app approval needed._\n\n"
+                f"You'll receive an automatic confirmation here once connected.\n"
+                f"Or tap *Done* below to check manually."
+            )
+        else:
+            instructions = (
+                f"*Connect your {platform_label}*\n\n"
+                f"Tap the link below and log in with your Instagram account:\n\n"
+                f"{connect_url}\n\n"
+                f"_Make sure to approve all permissions._\n\n"
+                f"You'll receive an automatic confirmation here once connected.\n"
+                f"Or tap *Done* below to check manually."
+            )
+        await wa.send_text(sender, instructions)
         await wa.send_interactive_buttons(
             sender,
             "Connected? Tap Done to verify:",
             [{"id": "pfm_done", "title": "Done — I connected"}],
         )
-        db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {})
+        return True
     else:
-        logger.error("PFM auth URL failed for %s: %s", sender, result.get("error"))
+        logger.error("PFM auth URL failed for %s (%s): %s", sender, platform, result.get("error"))
         from shared.config import PUBLIC_BASE_URL
         fix_url = f"{PUBLIC_BASE_URL}/connect/{sender}" if PUBLIC_BASE_URL else ""
         fix_line = f"\n\nOr try opening this link directly:\n{fix_url}" if fix_url else ""
@@ -210,6 +234,7 @@ async def handle_setup(db: BotDatabase, sender: str, text: str):
             f"Please try again in a moment, or send *reset* to clear your session."
             f"{fix_line}",
         )
+        return False
 
 
 async def handle_disconnect(db: BotDatabase, sender: str, text: str):
@@ -245,6 +270,31 @@ async def handle_setup_step(
     state: ConversationState, data: dict,
 ):
     """Handle setup states and disconnect actions."""
+
+    # --- CHOOSE PLATFORM FLOW ---
+    if data.get("action") == "choose_platform":
+        choice = text.lower().strip()
+        if choice == "setup_facebook":
+            platform = "facebook"
+        elif choice == "setup_instagram":
+            platform = "instagram"
+        else:
+            await wa.send_interactive_buttons(
+                sender,
+                "Please choose a platform:",
+                [
+                    {"id": "setup_facebook", "title": "Facebook"},
+                    {"id": "setup_instagram", "title": "Instagram"},
+                ],
+            )
+            return
+
+        success = await _send_auth_url(sender, platform)
+        if success:
+            db.set_conversation_state(sender, ConversationState.SETUP_MANUAL_CHOOSE, {"setup_platform": platform})
+        else:
+            db.clear_conversation_state(sender)
+        return
 
     # --- DISCONNECT FLOW ---
     if data.get("action") == "disconnect":
@@ -312,27 +362,29 @@ async def handle_setup_step(
                     f"You're all set. Send *post* to create your first post!",
                 )
             else:
+                setup_platform = data.get("setup_platform", "facebook")
                 from services.publisher import generate_auth_url
                 from shared.config import PUBLIC_BASE_URL
-                result = await generate_auth_url(sender, "facebook")
+                result = await generate_auth_url(sender, setup_platform)
                 connect_url = result.get("url", "")
                 fix_url = f"{PUBLIC_BASE_URL}/connect/{sender}" if PUBLIC_BASE_URL else ""
                 fix_line = f"\n\nIf your chat is stuck, open: {fix_url}" if fix_url else ""
+                platform_label = "Instagram" if setup_platform == "instagram" else "Facebook"
                 await wa.send_text(
                     sender,
-                    "⚠️ *No accounts detected yet.*\n\n"
-                    "Please complete the steps on the website — make sure to:\n"
-                    "1. Log in with Facebook\n"
-                    "2. Select your Page\n"
-                    "3. Approve *all* permissions\n\n"
+                    f"⚠️ *No accounts detected yet.*\n\n"
+                    f"Please complete the steps on the website — make sure to:\n"
+                    f"1. Log in with {platform_label}\n"
+                    f"2. Approve *all* permissions\n\n"
                     f"Connection link:\n{connect_url}\n\n"
                     f"Then tap *Done* again once finished."
                     f"{fix_line}",
                 )
         else:
             # Re-send a fresh connect URL
+            setup_platform = data.get("setup_platform", "facebook")
             from services.publisher import generate_auth_url
-            result = await generate_auth_url(sender, "facebook")
+            result = await generate_auth_url(sender, setup_platform)
             connect_url = result.get("url", "")
             if connect_url:
                 await wa.send_text(sender, f"Use this link to connect:\n{connect_url}")

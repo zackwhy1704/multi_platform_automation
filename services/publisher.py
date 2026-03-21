@@ -141,15 +141,25 @@ def _get_placement(media_url: Optional[str], post_type: str = "timeline") -> str
 # ---------------------------------------------------------------------------
 
 async def generate_auth_url(sender: str, platform: str = "facebook") -> dict:
-    """Generate a Post For Me OAuth URL for the user to connect their account."""
+    """Generate a Post For Me OAuth URL for the user to connect their account.
+
+    For Instagram, PFM requires platform_data.connection_type to specify
+    whether to use Login with Instagram or Login with Facebook.
+    """
     if not POSTFORME_API_KEY:
         return {"success": False, "error": "POSTFORME_API_KEY not configured"}
 
     try:
+        body: dict = {"platform": platform, "external_id": sender}
+
+        # Instagram requires platform_data.instagram.connection_type
+        if platform == "instagram":
+            body["platform_data"] = {"instagram": {"connection_type": "instagram"}}
+
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.post(
                 f"{PFM_BASE}/social-accounts/auth-url",
-                json={"platform": platform, "external_id": sender},
+                json=body,
                 headers=_headers(),
             )
             data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
