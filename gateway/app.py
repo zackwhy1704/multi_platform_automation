@@ -68,8 +68,46 @@ def _seed_defaults(database: BotDatabase):
             logger.warning("Could not seed promo code %s: %s", code, e)
 
 
+def _apply_schema_file(database: BotDatabase, path: str) -> None:
+    """Read a .sql file and execute it as one batch. Idempotent (uses IF NOT EXISTS)."""
+    if not os.path.exists(path):
+        logger.warning("Schema file not found: %s", path)
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            sql = f.read()
+        if sql.strip():
+            database.execute_query(sql)
+            logger.info("Applied schema file: %s (%d bytes)", path, len(sql))
+    except Exception as e:
+        logger.warning("Schema file apply failed (%s): %s", path, e)
+
+
 def _run_migrations(database: BotDatabase):
-    """Run idempotent schema migrations on startup."""
+    """Run idempotent schema migrations on startup.
+
+    On Railway / managed Postgres, no docker-entrypoint-initdb.d hook runs,
+    so we apply migrations/schema.sql ourselves. It's all IF NOT EXISTS, so
+    safe to re-run on every startup.
+    """
+    # Resolve repo-root migrations directory: this file lives at gateway/app.py
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(here)
+    migrations_dir = os.path.join(repo_root, "migrations")
+
+    # 1. Apply the base schema first (creates users, user_profiles, etc.)
+    _apply_schema_file(database, os.path.join(migrations_dir, "schema.sql"))
+
+    # 2. Apply numbered migration files in order (002_admin.sql, 003_*.sql, …)
+    if os.path.isdir(migrations_dir):
+        for fname in sorted(os.listdir(migrations_dir)):
+            if fname == "schema.sql":
+                continue
+            if not fname.endswith(".sql"):
+                continue
+            _apply_schema_file(database, os.path.join(migrations_dir, fname))
+
+    # 3. Inline additive migrations (legacy safety nets — kept idempotent)
     migrations = [
         # Add pfm_profile_key column if it doesn't exist (Post For Me integration)
         "ALTER TABLE platform_tokens ADD COLUMN IF NOT EXISTS pfm_profile_key VARCHAR(255)",
