@@ -40,6 +40,7 @@ from gateway.handlers.oauth import (
 )
 from gateway.media import MEDIA_DIR
 from gateway import whatsapp_client as wa
+from gateway import message_log as msglog
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -76,6 +77,38 @@ def _run_migrations(database: BotDatabase):
         "CREATE TABLE IF NOT EXISTS webhook_events (event_id VARCHAR(255) PRIMARY KEY, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)",
         # Add display_language column for i18n support
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_language VARCHAR(5) DEFAULT 'en'",
+        # --- Admin panel migration (002) ---
+        # message_log: every inbound/outbound WhatsApp message
+        """CREATE TABLE IF NOT EXISTS message_log (
+            id              BIGSERIAL PRIMARY KEY,
+            phone_number_id VARCHAR(64) NOT NULL,
+            direction       VARCHAR(8) NOT NULL CHECK (direction IN ('in','out')),
+            msg_type        VARCHAR(32) NOT NULL,
+            text_body       TEXT,
+            wa_message_id   VARCHAR(255),
+            metadata        JSONB DEFAULT '{}'::jsonb,
+            created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_message_log_user_time ON message_log(phone_number_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_message_log_time ON message_log(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_message_log_direction ON message_log(direction, created_at DESC)",
+        # admin_audit: every admin action
+        """CREATE TABLE IF NOT EXISTS admin_audit (
+            id           BIGSERIAL PRIMARY KEY,
+            actor        VARCHAR(64) NOT NULL DEFAULT 'admin',
+            action       VARCHAR(64) NOT NULL,
+            target_user  VARCHAR(64),
+            detail       JSONB DEFAULT '{}'::jsonb,
+            ip_address   VARCHAR(64),
+            created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_admin_audit_time ON admin_audit(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit(target_user, created_at DESC)",
+        # users: ban support
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_reason TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at TIMESTAMP WITH TIME ZONE",
+        "CREATE INDEX IF NOT EXISTS idx_users_banned ON users(banned) WHERE banned = TRUE",
     ]
     for sql in migrations:
         try:
@@ -151,6 +184,7 @@ async def lifespan(app: FastAPI):
     global db
     db = BotDatabase()
     app.state.db = db
+    msglog.attach_db(db)
     logger.info("Gateway started — database pool ready")
     _run_migrations(db)
     _seed_defaults(db)
@@ -170,6 +204,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Multi-Platform Automation Gateway", lifespan=lifespan)
+
+# Mount admin panel (single-password protected, /admin/*)
+from gateway.admin import router as admin_router  # noqa: E402
+app.include_router(admin_router)
 
 
 @app.get("/")

@@ -4,6 +4,7 @@ pywa>=1.25.0
 # Web framework
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9   # admin panel forms
 
 # Task queue
 celery[redis]>=5.3.0

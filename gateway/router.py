@@ -15,6 +15,7 @@ from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
 from gateway.handlers import onboarding, actions, subscription, settings
 from gateway.i18n import set_language
+from gateway.message_log import log_inbound
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,38 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
             "Please send your file as a photo or video instead.",
         )
         return
+
+    # --- Log the inbound message (admin panel visibility) ---
+    try:
+        _meta = {}
+        if msg_type == "interactive":
+            interactive = message.get("interactive", {})
+            _meta = {
+                "interactive_type": interactive.get("type"),
+                "reply": interactive.get(interactive.get("type") or "", {}),
+            }
+        elif msg_type in ("image", "video"):
+            _meta = {"media": message.get(msg_type, {}).get("id"), "mime": message.get(msg_type, {}).get("mime_type")}
+        log_inbound(
+            db=db,
+            phone_number_id=sender,
+            msg_type=msg_type or "unknown",
+            text_body=text,
+            wa_message_id=msg_id,
+            metadata=_meta,
+        )
+    except Exception:
+        # Logging never breaks message handling
+        pass
+
+    # --- Block banned users (admin panel: ban) ---
+    try:
+        u = db.get_user(sender)
+        if u and u.get("banned"):
+            # Silent drop — don't echo replies to banned users
+            return
+    except Exception:
+        pass
 
     # --- Route the message ---
 

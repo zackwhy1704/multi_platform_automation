@@ -9,6 +9,7 @@ from typing import Optional
 import httpx
 
 from shared.config import WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_TOKEN
+from gateway.message_log import log_outbound, summarize_buttons, summarize_sections
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,9 @@ async def send_text(to: str, body: str) -> bool:
         "type": "text",
         "text": {"body": body},
     }
-    return await _post(payload)
+    ok = await _post(payload)
+    log_outbound(to, "text", body, {"ok": ok})
+    return ok
 
 
 async def send_interactive_buttons(to: str, body: str, buttons: list[dict]) -> bool:
@@ -65,7 +68,14 @@ async def send_interactive_buttons(to: str, body: str, buttons: list[dict]) -> b
             "action": {"buttons": btn_rows},
         },
     }
-    return await _post(payload)
+    ok = await _post(payload)
+    log_outbound(
+        to,
+        "buttons",
+        body,
+        {"ok": ok, "buttons": summarize_buttons(buttons)},
+    )
+    return ok
 
 
 async def send_interactive_list(to: str, body: str, button_text: str, sections: list[dict]) -> bool:
@@ -89,7 +99,14 @@ async def send_interactive_list(to: str, body: str, button_text: str, sections: 
             "action": {"button": button_text[:20], "sections": sections},
         },
     }
-    return await _post(payload)
+    ok = await _post(payload)
+    log_outbound(
+        to,
+        "list",
+        body,
+        {"ok": ok, "items": summarize_sections(sections), "button": button_text},
+    )
+    return ok
 
 
 async def upload_media(file_path: str, mime_type: str) -> Optional[str]:
@@ -146,7 +163,14 @@ async def send_image(to: str, image_url: str, caption: str = "",
         }
     if caption:
         payload["image"]["caption"] = caption[:1024]
-    return await _post(payload)
+    ok = await _post(payload)
+    log_outbound(
+        to,
+        "image",
+        caption or "[image]",
+        {"ok": ok, "media_id": media_id, "url": image_url if not media_id else None},
+    )
+    return ok
 
 
 async def send_video(to: str, video_url: str, caption: str = "",
@@ -172,7 +196,14 @@ async def send_video(to: str, video_url: str, caption: str = "",
         }
     if caption:
         payload["video"]["caption"] = caption[:1024]
-    return await _post(payload)
+    ok = await _post(payload)
+    log_outbound(
+        to,
+        "video",
+        caption or "[video]",
+        {"ok": ok, "media_id": media_id, "url": video_url if not media_id else None},
+    )
+    return ok
 
 
 async def mark_as_read(message_id: str) -> bool:
