@@ -52,3 +52,20 @@ class ConversationState(str, Enum):
     # Avatar video — per-video generation
     AWAITING_AVATAR_SCRIPT = "awaiting_avatar_script"  # user types their spoken script
     AWAITING_AVATAR_STYLE  = "awaiting_avatar_style"   # user picks Professional/Warm/Luxury
+
+    # Content Intelligence Pipeline — pillar setup
+    AWAITING_PILLAR_MAIN   = "awaiting_pillar_main"    # user types main content pillar
+    AWAITING_PILLAR_SUB1   = "awaiting_pillar_sub1"    # user types sub-pillar 1
+    AWAITING_PILLAR_SUB2   = "awaiting_pillar_sub2"    # user types sub-pillar 2
+    AWAITING_PILLAR_CONFIRM = "awaiting_pillar_confirm" # user confirms pillar setup
+
+    # Content Intelligence Pipeline — idea mining
+    AWAITING_IDEA_SOURCE   = "awaiting_idea_source"    # user sends URL or pastes text
+    AWAITING_IDEA_CONFIRM  = "awaiting_idea_confirm"   # user reviews claims, confirms grade
+
+    # Content Intelligence Pipeline — content expansion
+    AWAITING_FORMAT_CHOICE = "awaiting_format_choice"  # user picks Reel/Carousel/Text/B-roll
+    AWAITING_EXPAND_CONFIRM = "awaiting_expand_confirm" # user reviews expanded content
+
+    # Content Intelligence Pipeline — production (Reel → avatar video)
+    AWAITING_REEL_STYLE    = "awaiting_reel_style"     # user picks video style for Reel

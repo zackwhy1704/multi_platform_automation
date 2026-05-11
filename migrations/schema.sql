@@ -229,3 +229,37 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 
 -- Auto-cleanup: events older than 30 days can be purged
 CREATE INDEX IF NOT EXISTS idx_webhook_events_date ON webhook_events(processed_at);
+
+-- ============================================================================
+-- CONTENT PILLARS (niche lens for idea grading)
+-- One row per user: main_pillar + sub_pillar_1 + sub_pillar_2
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS content_pillars (
+    phone_number_id VARCHAR(64) PRIMARY KEY REFERENCES users(phone_number_id) ON DELETE CASCADE,
+    main_pillar     TEXT NOT NULL,
+    sub_pillar_1    TEXT NOT NULL,
+    sub_pillar_2    TEXT NOT NULL,
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
+-- CONTENT IDEAS (idea mining + grading + expansion results)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS content_ideas (
+    id              SERIAL PRIMARY KEY,
+    phone_number_id VARCHAR(64) REFERENCES users(phone_number_id) ON DELETE CASCADE,
+    source_url      TEXT,
+    source_text     TEXT,
+    key_claims      JSONB DEFAULT '[]'::jsonb,     -- extracted claims array
+    virality_score  INT,
+    originality_score INT,
+    pillar_score    INT,
+    niche_angle     TEXT,
+    expanded_formats JSONB DEFAULT '{}'::jsonb,    -- format_type → content map
+    status          VARCHAR(20) DEFAULT 'graded'
+                    CHECK (status IN ('mined', 'graded', 'expanded', 'produced')),
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_ideas_user ON content_ideas(phone_number_id, created_at DESC);

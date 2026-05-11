@@ -211,6 +211,94 @@ class BotDatabase:
         )
 
     # =========================================================================
+    # CONTENT PILLARS
+    # =========================================================================
+
+    def save_content_pillars(self, phone_number_id: str,
+                              main_pillar: str,
+                              sub_pillar_1: str,
+                              sub_pillar_2: str) -> bool:
+        try:
+            self.create_user(phone_number_id)
+            self.execute_query(
+                """INSERT INTO content_pillars (phone_number_id, main_pillar, sub_pillar_1, sub_pillar_2)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (phone_number_id) DO UPDATE SET
+                    main_pillar = EXCLUDED.main_pillar,
+                    sub_pillar_1 = EXCLUDED.sub_pillar_1,
+                    sub_pillar_2 = EXCLUDED.sub_pillar_2,
+                    updated_at = CURRENT_TIMESTAMP""",
+                (phone_number_id, main_pillar, sub_pillar_1, sub_pillar_2),
+            )
+            return True
+        except Exception as e:
+            logger.error("Error saving content pillars for %s: %s", phone_number_id, e)
+            return False
+
+    def get_content_pillars(self, phone_number_id: str) -> Optional[Dict]:
+        return self.execute_query(
+            "SELECT main_pillar, sub_pillar_1, sub_pillar_2 FROM content_pillars WHERE phone_number_id = %s",
+            (phone_number_id,),
+            fetch="one",
+        )
+
+    # =========================================================================
+    # CONTENT IDEAS
+    # =========================================================================
+
+    def save_content_idea(self, phone_number_id: str, source_url: str = None,
+                          source_text: str = None, key_claims: list = None,
+                          virality_score: int = None, originality_score: int = None,
+                          pillar_score: int = None, niche_angle: str = None,
+                          expanded_formats: dict = None, status: str = "mined") -> Optional[int]:
+        """Insert a new content idea row and return its id."""
+        try:
+            result = self.execute_query(
+                """INSERT INTO content_ideas
+                   (phone_number_id, source_url, source_text, key_claims,
+                    virality_score, originality_score, pillar_score, niche_angle,
+                    expanded_formats, status)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (phone_number_id, source_url, source_text,
+                 Json(key_claims or []),
+                 virality_score, originality_score, pillar_score, niche_angle,
+                 Json(expanded_formats or {}), status),
+                fetch="one",
+            )
+            return result["id"] if result else None
+        except Exception as e:
+            logger.error("Error saving content idea for %s: %s", phone_number_id, e)
+            return None
+
+    def update_content_idea(self, idea_id: int, **kwargs) -> bool:
+        """Update specific fields of a content idea by id."""
+        if not kwargs:
+            return True
+        json_fields = {"key_claims", "expanded_formats"}
+        fields, values = [], []
+        for k, v in kwargs.items():
+            fields.append(f"{k} = %s")
+            values.append(Json(v) if k in json_fields else v)
+        values.append(idea_id)
+        try:
+            self.execute_query(
+                f"UPDATE content_ideas SET {', '.join(fields)} WHERE id = %s",
+                tuple(values),
+            )
+            return True
+        except Exception as e:
+            logger.error("Error updating content idea %s: %s", idea_id, e)
+            return False
+
+    def get_content_idea(self, idea_id: int) -> Optional[Dict]:
+        return self.execute_query(
+            "SELECT * FROM content_ideas WHERE id = %s",
+            (idea_id,),
+            fetch="one",
+        )
+
+    # =========================================================================
     # PLATFORM TOKENS (OAuth only — no passwords)
     # =========================================================================
 

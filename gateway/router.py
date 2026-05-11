@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from shared.database import BotDatabase
 from gateway.conversation import ConversationState
 from gateway import whatsapp_client as wa
-from gateway.handlers import onboarding, actions, subscription, settings
+from gateway.handlers import onboarding, actions, subscription, settings, content
 from gateway.i18n import set_language
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,8 @@ COMMANDS = {
     "avatar video": actions.handle_avatar_video,
     "avatar setup": actions.handle_avatar_setup,
     "redo voice": actions.handle_avatar_setup,
+    "pillars": content.handle_pillars,
+    "content idea": content.handle_content_idea,
 }
 
 STATE_HANDLERS = {
@@ -79,6 +81,17 @@ STATE_HANDLERS = {
     # Avatar video — generation
     ConversationState.AWAITING_AVATAR_SCRIPT: actions.handle_avatar_video_step,
     ConversationState.AWAITING_AVATAR_STYLE:  actions.handle_avatar_video_step,
+    # Content pillars setup
+    ConversationState.AWAITING_PILLAR_MAIN:    content.handle_pillar_step,
+    ConversationState.AWAITING_PILLAR_SUB1:    content.handle_pillar_step,
+    ConversationState.AWAITING_PILLAR_SUB2:    content.handle_pillar_step,
+    ConversationState.AWAITING_PILLAR_CONFIRM: content.handle_pillar_step,
+    # Content intelligence pipeline
+    ConversationState.AWAITING_IDEA_SOURCE:    content.handle_content_step,
+    ConversationState.AWAITING_IDEA_CONFIRM:   content.handle_content_step,
+    ConversationState.AWAITING_FORMAT_CHOICE:  content.handle_content_step,
+    ConversationState.AWAITING_EXPAND_CONFIRM: content.handle_content_step,
+    ConversationState.AWAITING_REEL_STYLE:     content.handle_content_step,
 }
 
 def _match_command(text: str):
@@ -277,6 +290,8 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         "*avatar video* — Create a video with your face & voice\n"
         "*avatar setup* — Set up / update your avatar profile\n"
         "*redo voice* — Re-record your voice sample\n"
+        "*pillars* — Set your content pillars (niche lens)\n"
+        "*content idea* — Mine, grade & expand a content idea\n"
         "*stats* — View your stats\n"
         "*credits* — Check credit balance\n"
         "*buy* — Purchase credit packs\n"

@@ -76,6 +76,34 @@ def _run_migrations(database: BotDatabase):
         "CREATE TABLE IF NOT EXISTS webhook_events (event_id VARCHAR(255) PRIMARY KEY, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)",
         # Add display_language column for i18n support
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_language VARCHAR(5) DEFAULT 'en'",
+        # Avatar video fields
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS profile_photo_url TEXT",
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS voice_clone_id VARCHAR(255)",
+        # Content pillars table
+        """CREATE TABLE IF NOT EXISTS content_pillars (
+            phone_number_id VARCHAR(64) PRIMARY KEY REFERENCES users(phone_number_id) ON DELETE CASCADE,
+            main_pillar     TEXT NOT NULL,
+            sub_pillar_1    TEXT NOT NULL,
+            sub_pillar_2    TEXT NOT NULL,
+            created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )""",
+        # Content ideas table
+        """CREATE TABLE IF NOT EXISTS content_ideas (
+            id                SERIAL PRIMARY KEY,
+            phone_number_id   VARCHAR(64) REFERENCES users(phone_number_id) ON DELETE CASCADE,
+            source_url        TEXT,
+            source_text       TEXT,
+            key_claims        JSONB DEFAULT '[]'::jsonb,
+            virality_score    INT,
+            originality_score INT,
+            pillar_score      INT,
+            niche_angle       TEXT,
+            expanded_formats  JSONB DEFAULT '{}'::jsonb,
+            status            VARCHAR(20) DEFAULT 'graded',
+            created_at        TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_content_ideas_user ON content_ideas(phone_number_id, created_at DESC)",
     ]
     for sql in migrations:
         try:
