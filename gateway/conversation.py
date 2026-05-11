@@ -44,5 +44,11 @@ class ConversationState(str, Enum):
 
     # AI content generation
     AWAITING_AI_IMAGE_PROMPT = "awaiting_ai_image_prompt"
-    AWAITING_AI_VIDEO_PROMPT = "awaiting_ai_video_prompt"
-    AWAITING_AI_VIDEO_LENGTH = "awaiting_ai_video_length"
+
+    # Avatar video — one-time setup
+    AWAITING_AVATAR_PHOTO        = "awaiting_avatar_photo"         # user sends reference photo
+    AWAITING_AVATAR_VOICE_SAMPLE = "awaiting_avatar_voice_sample"  # user sends 30-60s voice note
+
+    # Avatar video — per-video generation
+    AWAITING_AVATAR_SCRIPT = "awaiting_avatar_script"  # user types their spoken script
+    AWAITING_AVATAR_STYLE  = "awaiting_avatar_style"   # user picks Professional/Warm/Luxury

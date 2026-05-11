@@ -41,7 +41,7 @@ ACTION_COSTS = {
     "beautify_caption": 2,
     # AI content generation
     "ai_image": 10,
-    "ai_video": 30,
+    "ai_video": 30,   # avatar video (ElevenLabs TTS + Seed Dance)
     # Comment auto-reply
     "comment_reply": 2,
     # Legacy (backwards compat)

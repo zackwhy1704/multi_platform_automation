@@ -166,6 +166,50 @@ class BotDatabase:
     def get_user_profile(self, phone_number_id: str) -> Optional[Dict]:
         return self.execute_query("SELECT * FROM user_profiles WHERE phone_number_id = %s", (phone_number_id,), fetch="one")
 
+    def save_avatar_profile(self, phone_number_id: str,
+                            profile_photo_url: str = None,
+                            voice_clone_id: str = None,
+                            voice_clone_status: str = None) -> bool:
+        """Update avatar video fields (photo URL and/or voice clone) on user_profiles."""
+        try:
+            self.create_user(phone_number_id)
+            # Ensure a profile row exists before updating
+            self.execute_query(
+                """INSERT INTO user_profiles (phone_number_id) VALUES (%s)
+                ON CONFLICT (phone_number_id) DO NOTHING""",
+                (phone_number_id,),
+            )
+            fields, values = [], []
+            if profile_photo_url is not None:
+                fields.append("profile_photo_url = %s")
+                values.append(profile_photo_url)
+            if voice_clone_id is not None:
+                fields.append("voice_clone_id = %s")
+                values.append(voice_clone_id)
+            if voice_clone_status is not None:
+                fields.append("voice_clone_status = %s")
+                values.append(voice_clone_status)
+            if not fields:
+                return True
+            fields.append("updated_at = CURRENT_TIMESTAMP")
+            values.append(phone_number_id)
+            self.execute_query(
+                f"UPDATE user_profiles SET {', '.join(fields)} WHERE phone_number_id = %s",
+                tuple(values),
+            )
+            return True
+        except Exception as e:
+            logger.error("Error saving avatar profile %s: %s", phone_number_id, e)
+            return False
+
+    def get_avatar_profile(self, phone_number_id: str) -> Optional[Dict]:
+        """Return profile_photo_url, voice_clone_id, voice_clone_status for a user."""
+        return self.execute_query(
+            "SELECT profile_photo_url, voice_clone_id, voice_clone_status FROM user_profiles WHERE phone_number_id = %s",
+            (phone_number_id,),
+            fetch="one",
+        )
+
     # =========================================================================
     # PLATFORM TOKENS (OAuth only — no passwords)
     # =========================================================================

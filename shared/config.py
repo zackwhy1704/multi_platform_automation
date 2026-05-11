@@ -74,9 +74,11 @@ AI_MODEL = os.getenv("AI_MODEL", "claude-haiku-4-5-20251001")
 # --- AI (OpenAI — image generation via gpt-image-1) ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
-# --- AI (Kling — video generation) ---
-KLING_ACCESS_KEY = os.getenv("KLING_ACCESS_KEY", "")
-KLING_SECRET_KEY = os.getenv("KLING_SECRET_KEY", "")
+# --- AI (ElevenLabs — voice cloning + TTS) ---
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+
+# --- AI (fal.ai — Seed Dance video generation) ---
+FAL_KEY = os.getenv("FAL_KEY", "")
 
 # --- Credits ---
 MONTHLY_CREDITS = int(os.getenv("MONTHLY_CREDITS", 500))

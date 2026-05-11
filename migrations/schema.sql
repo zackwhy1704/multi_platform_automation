@@ -87,6 +87,12 @@ ALTER TABLE platform_tokens ADD COLUMN IF NOT EXISTS pfm_profile_key VARCHAR(255
 -- Add display_language column to users (default English)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS display_language VARCHAR(5) DEFAULT 'en';
 
+-- Avatar video: reference photo + voice clone fields
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS profile_photo_url  TEXT;
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS voice_clone_id     VARCHAR(255);
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS voice_clone_status VARCHAR(20) DEFAULT 'none'
+    CHECK (voice_clone_status IN ('none', 'pending', 'ready', 'failed'));
+
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON platform_tokens(phone_number_id, platform);
 
 -- ============================================================================

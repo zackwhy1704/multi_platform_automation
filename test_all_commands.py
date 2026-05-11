@@ -71,7 +71,8 @@ EXPECTED_STATES = {
     "setup": "setup_platform",
     "language": "awaiting_language",
     "ai image": "awaiting_ai_image_prompt",
-    "ai video": "awaiting_ai_video_prompt",
+    "avatar setup": "awaiting_avatar_photo",
+    "avatar video": "SKIP",  # requires avatar profile to be set up first
     "disconnect": "setup_platform",
     # These commands don't set state (respond and stay idle)
     "help": None,
@@ -104,10 +105,9 @@ MULTI_STEP_FLOWS = {
         ("text", "ai image", "awaiting_ai_image_prompt"),
         # Don't actually generate (costs credits) — just verify state was set
     ],
-    "ai video → enter prompt → select length (5s)": [
-        ("text", "ai video", "awaiting_ai_video_prompt"),
-        ("text", "a beautiful sunset over the ocean", "awaiting_ai_video_length"),
-        # Don't actually generate (costs 30 credits) — just verify length picker appears
+    "avatar setup → expects photo": [
+        ("text", "avatar setup", "awaiting_avatar_photo"),
+        # Next step requires sending a real image — skipped in unit tests
     ],
     "language → select english": [
         ("text", "language", "awaiting_language"),

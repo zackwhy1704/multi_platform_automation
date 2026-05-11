@@ -39,7 +39,9 @@ COMMANDS = {
     "reset": settings.handle_reset,
     "language": settings.handle_language,
     "ai image": actions.handle_ai_image,
-    "ai video": actions.handle_ai_video,
+    "avatar video": actions.handle_avatar_video,
+    "avatar setup": actions.handle_avatar_setup,
+    "redo voice": actions.handle_avatar_setup,
 }
 
 STATE_HANDLERS = {
@@ -71,8 +73,12 @@ STATE_HANDLERS = {
     ConversationState.AWAITING_LANGUAGE: settings.handle_language_step,
     # AI content generation
     ConversationState.AWAITING_AI_IMAGE_PROMPT: actions.handle_ai_content_step,
-    ConversationState.AWAITING_AI_VIDEO_PROMPT: actions.handle_ai_content_step,
-    ConversationState.AWAITING_AI_VIDEO_LENGTH: actions.handle_ai_content_step,
+    # Avatar video — setup
+    ConversationState.AWAITING_AVATAR_PHOTO:        actions.handle_avatar_setup_step,
+    ConversationState.AWAITING_AVATAR_VOICE_SAMPLE: actions.handle_avatar_setup_step,
+    # Avatar video — generation
+    ConversationState.AWAITING_AVATAR_SCRIPT: actions.handle_avatar_video_step,
+    ConversationState.AWAITING_AVATAR_STYLE:  actions.handle_avatar_video_step,
 }
 
 def _match_command(text: str):
@@ -89,9 +95,11 @@ def _match_command(text: str):
     return None
 
 
-# States that accept media messages (photo/video)
+# States that accept media messages (photo/video/audio)
 MEDIA_ACCEPTING_STATES = {
     ConversationState.AWAITING_POST_MEDIA,
+    ConversationState.AWAITING_AVATAR_PHOTO,
+    ConversationState.AWAITING_AVATAR_VOICE_SAMPLE,
 }
 
 
@@ -141,7 +149,7 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         elif interactive.get("type") == "list_reply":
             text = interactive.get("list_reply", {}).get("id", "")
 
-    elif msg_type in ("image", "video"):
+    elif msg_type in ("image", "video", "audio"):
         # Media message — download it
         media_obj = message.get(msg_type, {})
         media_id = media_obj.get("id")
@@ -213,11 +221,13 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
                 return
             elif state in MEDIA_ACCEPTING_STATES and not media_info and not text:
                 # User sent something else (not media and not text) while we expect media
-                await wa.send_text(
-                    sender,
-                    "Please send a *photo or video* for your post.\n"
-                    "Or type *reset* to exit.",
-                )
+                if state == ConversationState.AWAITING_AVATAR_PHOTO:
+                    prompt = "Please send a *photo* of yourself."
+                elif state == ConversationState.AWAITING_AVATAR_VOICE_SAMPLE:
+                    prompt = "Please send a *voice note* (hold the microphone button in WhatsApp)."
+                else:
+                    prompt = "Please send a *photo or video* for your post."
+                await wa.send_text(sender, prompt + "\nOr type *reset* to exit.")
                 return
             elif text or media_info:
                 # For non-media states, we need text
@@ -264,7 +274,9 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         "*schedule* — Schedule a post\n"
         "*reply* — Auto-reply to comments\n"
         "*ai image* — Generate an AI image\n"
-        "*ai video* — Generate an AI video\n"
+        "*avatar video* — Create a video with your face & voice\n"
+        "*avatar setup* — Set up / update your avatar profile\n"
+        "*redo voice* — Re-record your voice sample\n"
         "*stats* — View your stats\n"
         "*credits* — Check credit balance\n"
         "*buy* — Purchase credit packs\n"

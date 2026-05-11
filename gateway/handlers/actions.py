@@ -18,6 +18,7 @@ Weekly auto-post (Facebook only — text posts):
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timedelta
 from shared.database import BotDatabase
@@ -697,21 +698,82 @@ async def handle_ai_image(db: BotDatabase, sender: str, text: str):
     db.set_conversation_state(sender, ConversationState.AWAITING_AI_IMAGE_PROMPT, {})
 
 
-async def handle_ai_video(db: BotDatabase, sender: str, text: str):
-    """Start AI video generation flow."""
+async def handle_avatar_setup(db: BotDatabase, sender: str, text: str):
+    """
+    Entry point for avatar video setup or re-setup.
+    Checks which setup steps are missing and guides the user through them.
+    Called by 'avatar setup' or 'redo voice' commands.
+    """
+    avatar = db.get_avatar_profile(sender) or {}
+    has_photo = bool(avatar.get("profile_photo_url"))
+    has_voice = avatar.get("voice_clone_status") == "ready"
+
+    if not has_photo:
+        await wa.send_text(
+            sender,
+            "*Avatar Video Setup — Step 1 of 2* 📸\n\n"
+            "Send a clear, front-facing photo of yourself.\n\n"
+            "This will be used as your face in all avatar videos. "
+            "You only need to do this once.",
+        )
+        db.set_conversation_state(sender, ConversationState.AWAITING_AVATAR_PHOTO, {})
+    elif not has_voice:
+        await _prompt_voice_sample(sender)
+        db.set_conversation_state(sender, ConversationState.AWAITING_AVATAR_VOICE_SAMPLE, {})
+    else:
+        await wa.send_text(
+            sender,
+            "✅ Your avatar profile is already set up!\n\n"
+            "Send *avatar video* to create a video.\n"
+            "Send *redo voice* to re-record your voice sample.",
+        )
+
+
+async def _prompt_voice_sample(sender: str):
+    await wa.send_text(
+        sender,
+        "*Avatar Video Setup — Step 2 of 2* 🎙\n\n"
+        "Send a voice note of yourself speaking naturally for *30–60 seconds*.\n\n"
+        "Tips for best results:\n"
+        "  • Speak clearly in a quiet room\n"
+        "  • Use your normal speaking pace\n"
+        "  • Read anything — news, a script, even just describe your day\n\n"
+        "This trains your personal AI voice clone.",
+    )
+
+
+async def handle_avatar_video(db: BotDatabase, sender: str, text: str):
+    """Entry point for 'avatar video' command — checks setup is complete then starts flow."""
+    avatar = db.get_avatar_profile(sender) or {}
+    has_photo = bool(avatar.get("profile_photo_url"))
+    has_voice = avatar.get("voice_clone_status") == "ready"
+
+    if not has_photo or not has_voice:
+        missing = []
+        if not has_photo:
+            missing.append("profile photo")
+        if not has_voice:
+            missing.append("voice clone")
+        await wa.send_text(
+            sender,
+            f"⚠️ Your avatar profile isn't complete yet. Missing: {', '.join(missing)}.\n\n"
+            "Send *avatar setup* to complete your profile first.",
+        )
+        return
+
     if not await _check_credits(db, sender, "ai_video"):
         return
 
     cost = ACTION_COSTS.get("ai_video", 30)
     await wa.send_text(
         sender,
-        f"*AI Video Generation* 🎬\n\n"
+        f"*Avatar Video* 🎬\n\n"
         f"Cost: *{cost} credits* per video\n\n"
-        f"⚠️ *Note:* Credits will be deducted once generation starts, "
-        f"even if you're not satisfied with the result.\n\n"
-        f"Type your video prompt below — describe the scene you want:",
+        "Type the script you want to speak in your video.\n"
+        "Keep it under 80 words (~30 seconds).\n\n"
+        "Example: _Hi, I'm Sarah from Century 21. This stunning 3-bedroom..._",
     )
-    db.set_conversation_state(sender, ConversationState.AWAITING_AI_VIDEO_PROMPT, {})
+    db.set_conversation_state(sender, ConversationState.AWAITING_AVATAR_SCRIPT, {})
 
 
 async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
@@ -758,45 +820,126 @@ async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
                 "Send *ai image* to try again with a different prompt.",
             )
 
-    elif state == ConversationState.AWAITING_AI_VIDEO_PROMPT:
-        if not text.strip():
-            await wa.send_text(sender, "Please type a description for the video you want to generate.")
+async def handle_avatar_setup_step(db: BotDatabase, sender: str, text: str,
+                                    state: ConversationState, data: dict,
+                                    media_info: dict = None, **kwargs):
+    """Handle multi-step avatar setup: photo upload → voice sample → clone."""
+
+    if state == ConversationState.AWAITING_AVATAR_PHOTO:
+        if not media_info or not media_info.get("mime_type", "").startswith("image/"):
+            await wa.send_text(sender, "Please send a photo (not a document or video).")
             return
 
-        data["prompt"] = text.strip()
-        db.set_conversation_state(sender, ConversationState.AWAITING_AI_VIDEO_LENGTH, data)
+        from gateway.media import get_media_public_url
+        from shared.config import PUBLIC_BASE_URL
+        photo_url = get_media_public_url(media_info["filename"], PUBLIC_BASE_URL)
+        db.save_avatar_profile(sender, profile_photo_url=photo_url)
+
+        await _prompt_voice_sample(sender)
+        db.set_conversation_state(sender, ConversationState.AWAITING_AVATAR_VOICE_SAMPLE, {})
+
+    elif state == ConversationState.AWAITING_AVATAR_VOICE_SAMPLE:
+        if not media_info or not media_info.get("mime_type", "").startswith("audio/"):
+            await wa.send_text(
+                sender,
+                "Please send a voice note (hold the microphone button in WhatsApp).",
+            )
+            return
+
+        await wa.send_text(
+            sender,
+            "⏳ Cloning your voice... This takes about 30 seconds.",
+        )
+        db.save_avatar_profile(sender, voice_clone_status="pending")
+        db.clear_conversation_state(sender)
+
+        # Delete old voice clone if re-doing
+        existing = db.get_avatar_profile(sender) or {}
+        old_voice_id = existing.get("voice_clone_id")
+
+        from services.ai.voice_generator import clone_voice, delete_voice
+        if old_voice_id:
+            await asyncio.to_thread(delete_voice, old_voice_id)
+
+        user_label = f"user_{sender}"
+        voice_id = await asyncio.to_thread(clone_voice, user_label, media_info["file_path"])
+
+        if voice_id:
+            db.save_avatar_profile(sender, voice_clone_id=voice_id, voice_clone_status="ready")
+            await wa.send_text(
+                sender,
+                "✅ *Avatar profile complete!*\n\n"
+                "Your face and voice are saved.\n\n"
+                "Send *avatar video* to create your first video.",
+            )
+        else:
+            db.save_avatar_profile(sender, voice_clone_status="failed")
+            await wa.send_text(
+                sender,
+                "❌ Voice cloning failed. Please try again with a clearer recording.\n\n"
+                "Send *avatar setup* to retry.",
+            )
+
+
+async def handle_avatar_video_step(db: BotDatabase, sender: str, text: str,
+                                    state: ConversationState, data: dict, **kwargs):
+    """Handle avatar video generation: script → style → generate."""
+
+    if state == ConversationState.AWAITING_AVATAR_SCRIPT:
+        script = text.strip()
+        if not script:
+            await wa.send_text(sender, "Please type the script you want to speak in your video.")
+            return
+
+        if len(script) > 600:
+            await wa.send_text(
+                sender,
+                f"Your script is {len(script)} characters — please keep it under 600 "
+                "(about 80 words / 30 seconds).",
+            )
+            return
+
+        data["script"] = script
+        db.set_conversation_state(sender, ConversationState.AWAITING_AVATAR_STYLE, data)
 
         await wa.send_interactive_list(
             sender,
-            "Choose the video length:\n\n_(Limited to 5s and 10s — longer videos may have issues loading)_",
-            "Select Length",
+            "Choose your video style:",
+            "Select Style",
             [{
-                "title": "Video Length",
+                "title": "Video Style",
                 "rows": [
-                    {"id": "vlen_5", "title": "5 seconds", "description": "Quick clip"},
-                    {"id": "vlen_10", "title": "10 seconds", "description": "Standard"},
+                    {"id": "vstyle_professional", "title": "Professional",
+                     "description": "Office setting, confident, 16:9"},
+                    {"id": "vstyle_warm",         "title": "Warm & Friendly",
+                     "description": "Natural setting, approachable, 9:16"},
+                    {"id": "vstyle_luxury",       "title": "Luxury / Premium",
+                     "description": "Cinematic, dramatic lighting, 9:16"},
                 ],
             }],
         )
 
-    elif state == ConversationState.AWAITING_AI_VIDEO_LENGTH:
-        choice = text.lower().strip()
-
-        duration_map = {
-            "vlen_5": 5,
-            "vlen_10": 10,
+    elif state == ConversationState.AWAITING_AVATAR_STYLE:
+        style_map = {
+            "vstyle_professional": "professional",
+            "vstyle_warm":         "warm",
+            "vstyle_luxury":       "luxury",
         }
-        duration = duration_map.get(choice)
-        if not duration:
+        style = style_map.get(text.lower().strip())
+        if not style:
             await wa.send_interactive_list(
                 sender,
-                "Please select a valid video length:",
-                "Select Length",
+                "Please select a video style:",
+                "Select Style",
                 [{
-                    "title": "Video Length",
+                    "title": "Video Style",
                     "rows": [
-                        {"id": "vlen_5", "title": "5 seconds", "description": "Quick clip"},
-                        {"id": "vlen_10", "title": "10 seconds", "description": "Standard"},
+                        {"id": "vstyle_professional", "title": "Professional",
+                         "description": "Office setting, confident, 16:9"},
+                        {"id": "vstyle_warm",         "title": "Warm & Friendly",
+                         "description": "Natural setting, approachable, 9:16"},
+                        {"id": "vstyle_luxury",       "title": "Luxury / Premium",
+                         "description": "Cinematic, dramatic lighting, 9:16"},
                     ],
                 }],
             )
@@ -804,34 +947,55 @@ async def handle_ai_content_step(db: BotDatabase, sender: str, text: str,
 
         db.clear_conversation_state(sender)
 
-        # Deduct credits before generation
         cm = CreditManager(db)
         if not cm.deduct(sender, "ai_video", "ai"):
             await wa.send_text(sender, "Insufficient credits. Send *credits* for details.")
             return
 
         balance = cm.get_balance(sender)
-
         await wa.send_text(
             sender,
-            f"Generating your {duration}s video... This may take 3-5 minutes.\n"
+            f"Generating your avatar video... This may take 3–5 minutes.\n"
             f"Credits used: *{get_action_cost('ai_video')}* | Remaining: *{balance}*",
         )
 
-        from services.ai.video_generator import generate_video
+        avatar = db.get_avatar_profile(sender) or {}
+        photo_url = avatar.get("profile_photo_url")
+        voice_id  = avatar.get("voice_clone_id")
+        script    = data.get("script", "")
+
+        # Step 1: TTS — generate MP3 from script using cloned voice
+        from services.ai.voice_generator import generate_speech
+        from shared.config import PUBLIC_BASE_URL
+        from gateway.media import get_media_public_url
+
+        audio_path = await asyncio.to_thread(generate_speech, voice_id, script)
+        if not audio_path:
+            await wa.send_text(
+                sender,
+                "❌ Voice generation failed. Your credits have been used.\n\n"
+                "Send *avatar video* to try again.",
+            )
+            return
+
+        audio_filename = os.path.basename(audio_path)
+        audio_url = get_media_public_url(audio_filename, PUBLIC_BASE_URL)
+
+        # Step 2: Seed Dance — animate photo with audio
+        from services.ai.video_generator import generate_avatar_video
         try:
-            result = await generate_video(data["prompt"], duration=str(duration))
+            result = await generate_avatar_video(photo_url, audio_url, style=style)
         except Exception as e:
-            logger.error("AI video error for %s: %s", sender, e)
+            logger.error("Avatar video error for %s: %s", sender, e)
             result = None
 
         if result and result.get("url"):
-            sent = await wa.send_video(sender, result["url"], caption="Here's your AI-generated video!")
+            sent = await wa.send_video(sender, result["url"], caption="Here's your avatar video!")
             if not sent:
-                await wa.send_text(sender, f"Here's your AI-generated video:\n{result['url']}")
+                await wa.send_text(sender, f"Here's your avatar video:\n{result['url']}")
         else:
             await wa.send_text(
                 sender,
                 "❌ Video generation failed. Your credits have been used.\n\n"
-                "Send *ai video* to try again with a different prompt.",
+                "Send *avatar video* to try again.",
             )

@@ -5,7 +5,7 @@ Direct API integration tests — actually calls every external API.
 Tests:
   1. Anthropic Claude (caption generation, post generation, image search query)
   2. OpenAI gpt-image-1 (image generation, base64 decode, file save)
-  3. Kling AI (video generation, JWT auth, polling)
+  3. ElevenLabs + fal.ai Seed Dance (avatar video pipeline)
   4. Pexels (stock image search)
   5. Stripe (checkout session creation, price ID validation)
   6. Facebook Graph API (token validation, page listing)
@@ -16,7 +16,7 @@ Usage:
   python3 api_test.py              # run all tests
   python3 api_test.py anthropic    # run only anthropic tests
   python3 api_test.py openai       # run only openai tests
-  python3 api_test.py kling        # run only kling tests
+  python3 api_test.py avatar       # run only avatar pipeline tests
   python3 api_test.py pexels       # run only pexels tests
   python3 api_test.py stripe       # run only stripe tests
   python3 api_test.py whatsapp     # run only whatsapp tests
@@ -41,8 +41,8 @@ load_dotenv(override=True)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 AI_MODEL = os.getenv("AI_MODEL", "claude-haiku-4-5-20251001")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-KLING_ACCESS_KEY = os.getenv("KLING_ACCESS_KEY", "")
-KLING_SECRET_KEY = os.getenv("KLING_SECRET_KEY", "")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+FAL_KEY = os.getenv("FAL_KEY", "")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PRICE_ID_PRO = os.getenv("STRIPE_PRICE_ID_PRO", "")
@@ -328,106 +328,68 @@ async def test_openai():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. KLING AI VIDEO GENERATION
+# 3. ELEVENLABS + FAL.AI SEED DANCE (AVATAR VIDEO PIPELINE)
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def test_kling():
-    section("3. Kling AI Video Generation")
+async def test_avatar_pipeline():
+    section("3. Avatar Video Pipeline (ElevenLabs + Seed Dance)")
 
-    if not KLING_ACCESS_KEY or not KLING_SECRET_KEY:
-        test_skip("Kling tests", "KLING_ACCESS_KEY/KLING_SECRET_KEY not set")
-        return
-
-    # Test 3a: JWT token generation
-    try:
-        from services.ai.video_generator import _generate_jwt_token
-        token = _generate_jwt_token()
-        if token and len(token) > 50:
-            test_pass(f"JWT token generated — {len(token)} chars")
-        else:
-            test_fail("JWT token — empty or too short", str(token))
-            return  # Can't proceed without JWT
-    except Exception as e:
-        test_fail("JWT token generation", str(e))
-        return
-
-    # Test 3b: Submit a video task (don't wait for completion to save time)
-    try:
-        import jwt as pyjwt
-        payload = {
-            "iss": KLING_ACCESS_KEY,
-            "exp": int(time.time()) + 1800,
-            "nbf": int(time.time()) - 5,
-        }
-        jwt_token = pyjwt.encode(payload, KLING_SECRET_KEY, algorithm="HS256")
-
-        headers = {
-            "Authorization": f"Bearer {jwt_token}",
-            "Content-Type": "application/json",
-        }
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://api.klingai.com/v1/videos/text2video",
-                json={
-                    "model_name": "kling-v1",
-                    "prompt": "A simple blue ball bouncing",
-                    "cfg_scale": 0.5,
-                    "mode": "std",
-                    "duration": "5",
-                    "aspect_ratio": "1:1",
-                },
-                headers=headers,
-            )
-
-            if resp.status_code == 200:
-                data = resp.json().get("data", {})
-                task_id = data.get("task_id")
-                if task_id:
-                    test_pass(f"Video task submitted — task_id={task_id}")
-
-                    # Test 3c: Poll once to verify status endpoint works
-                    await asyncio.sleep(3)
-                    status_resp = await client.get(
-                        f"https://api.klingai.com/v1/videos/text2video/{task_id}",
-                        headers=headers,
-                    )
-                    if status_resp.status_code == 200:
-                        status_data = status_resp.json().get("data", {})
-                        task_status = status_data.get("task_status", "unknown")
-                        test_pass(f"Video status poll — status={task_status}")
-
-                        # If already succeeded (unlikely but possible), verify URL
-                        if task_status == "succeed":
-                            works = status_data.get("task_result", {}).get("videos", [])
-                            if works and works[0].get("url"):
-                                test_pass(f"Video URL — {works[0]['url'][:80]}...")
-                    else:
-                        test_fail("Video status poll", f"HTTP {status_resp.status_code}: {status_resp.text[:200]}")
-                else:
-                    test_fail("Video task — no task_id", str(resp.json()))
+    # Test 3a: ElevenLabs TTS — generate speech with a default voice (no clone needed)
+    if not ELEVENLABS_API_KEY:
+        test_skip("ElevenLabs TTS", "ELEVENLABS_API_KEY not set")
+    else:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM",
+                    headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+                    params={"output_format": "mp3_44100_128"},
+                    json={"text": "Avatar video test.", "model_id": "eleven_v3"},
+                )
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                test_pass(f"ElevenLabs TTS — {len(resp.content)} bytes returned")
             else:
-                error_body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:300]
-                test_fail(f"Video task submit — HTTP {resp.status_code}", str(error_body))
+                test_fail(f"ElevenLabs TTS — HTTP {resp.status_code}", resp.text[:200])
+        except Exception as e:
+            test_fail("ElevenLabs TTS", str(e))
 
-    except Exception as e:
-        test_fail("Kling API", str(e))
-
-    # Test 3d: build_video_prompt
+    # Test 3b: voice_generator module imports cleanly
     try:
-        from services.ai.video_generator import build_video_prompt
-        profile = {
-            "industry": ["Technology"],
-            "offerings": ["SaaS"],
-            "tone": ["professional"],
-        }
-        prompt = build_video_prompt(profile, "mixed", "photorealistic", "product demo", "instagram")
-        if len(prompt) > 20:
-            test_pass(f"build_video_prompt — {len(prompt)} chars")
-        else:
-            test_fail("build_video_prompt — too short")
+        from services.ai.voice_generator import clone_voice, delete_voice, generate_speech
+        test_pass("voice_generator module imports OK")
     except Exception as e:
-        test_fail("build_video_prompt", str(e))
+        test_fail("voice_generator import", str(e))
+
+    # Test 3c: fal.ai connectivity — list models (no video cost)
+    if not FAL_KEY:
+        test_skip("fal.ai connectivity", "FAL_KEY not set")
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    "https://queue.fal.run/bytedance/seedance-2.0/image-to-video",
+                    headers={"Authorization": f"Key {FAL_KEY}"},
+                )
+            # 405 = endpoint exists but GET not allowed — means auth and routing work
+            if resp.status_code in (200, 405, 422):
+                test_pass(f"fal.ai Seed Dance endpoint reachable (HTTP {resp.status_code})")
+            else:
+                test_fail(f"fal.ai connectivity — HTTP {resp.status_code}", resp.text[:200])
+        except Exception as e:
+            test_fail("fal.ai connectivity", str(e))
+
+    # Test 3d: video_generator module imports and style map
+    try:
+        from services.ai.video_generator import generate_avatar_video, VIDEO_STYLES, build_avatar_prompt
+        assert "professional" in VIDEO_STYLES
+        assert "warm" in VIDEO_STYLES
+        assert "luxury" in VIDEO_STYLES
+        prompt = build_avatar_prompt(["real estate"], "3-bedroom property in KL", "professional")
+        assert len(prompt) > 20
+        test_pass(f"video_generator module OK — build_avatar_prompt: {len(prompt)} chars")
+    except Exception as e:
+        test_fail("video_generator import/styles", str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -752,7 +714,8 @@ async def main():
     configs = {
         "ANTHROPIC_API_KEY": bool(ANTHROPIC_API_KEY),
         "OPENAI_API_KEY": bool(OPENAI_API_KEY),
-        "KLING_ACCESS_KEY": bool(KLING_ACCESS_KEY),
+        "ELEVENLABS_API_KEY": bool(ELEVENLABS_API_KEY),
+        "FAL_KEY": bool(FAL_KEY),
         "PEXELS_API_KEY": bool(PEXELS_API_KEY),
         "STRIPE_SECRET_KEY": bool(STRIPE_SECRET_KEY),
         "WHATSAPP_TOKEN": bool(WA_TOKEN),
@@ -768,7 +731,7 @@ async def main():
     test_map = {
         "anthropic": test_anthropic,
         "openai": test_openai,
-        "kling": test_kling,
+        "avatar": test_avatar_pipeline,
         "pexels": test_pexels,
         "stripe": test_stripe,
         "whatsapp": test_whatsapp,
