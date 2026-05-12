@@ -46,13 +46,13 @@ def clone_voice(user_label: str, audio_file_path: str) -> Optional[str]:
         client = _client()
         filename = os.path.basename(audio_file_path)
         with open(audio_file_path, "rb") as f:
-            # Pass (filename, file_object) so ElevenLabs knows the format
-            voice = client.clone(
+            # SDK >= 1.x: instant voice cloning lives at voices.ivc.create()
+            response = client.voices.ivc.create(
                 name=user_label,
                 description="User voice clone for avatar video generation",
                 files=[(filename, f)],
             )
-        voice_id = voice.voice_id
+        voice_id = response.voice_id
         logger.info("Voice cloned for %s → voice_id: %s", user_label, voice_id)
         return voice_id
     except Exception as e:
