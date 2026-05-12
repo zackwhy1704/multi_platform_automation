@@ -39,11 +39,7 @@ COMMANDS = {
     "reset": settings.handle_reset,
     "language": settings.handle_language,
     "ai image": actions.handle_ai_image,
-    "avatar video": actions.handle_avatar_video,
-    "avatar setup": actions.handle_avatar_setup,
-    "redo voice": actions.handle_avatar_setup,
-    "pillars": content.handle_pillars,
-    "content idea": content.handle_content_idea,
+    "video": content.handle_video,
 }
 
 STATE_HANDLERS = {
@@ -75,12 +71,11 @@ STATE_HANDLERS = {
     ConversationState.AWAITING_LANGUAGE: settings.handle_language_step,
     # AI content generation
     ConversationState.AWAITING_AI_IMAGE_PROMPT: actions.handle_ai_content_step,
-    # Avatar video — setup
+    # Avatar — setup (photo + voice)
     ConversationState.AWAITING_AVATAR_PHOTO:        actions.handle_avatar_setup_step,
     ConversationState.AWAITING_AVATAR_VOICE_SAMPLE: actions.handle_avatar_setup_step,
-    # Avatar video — generation
-    ConversationState.AWAITING_AVATAR_SCRIPT: actions.handle_avatar_video_step,
-    ConversationState.AWAITING_AVATAR_STYLE:  actions.handle_avatar_video_step,
+    # Video menu
+    ConversationState.AWAITING_VIDEO_MENU:     content.handle_video_menu_step,
     # Content pillars setup
     ConversationState.AWAITING_PILLAR_MAIN:    content.handle_pillar_step,
     ConversationState.AWAITING_PILLAR_SUB1:    content.handle_pillar_step,
@@ -287,11 +282,7 @@ async def _route_message(db: BotDatabase, sender: str, message: dict, contact_na
         "*schedule* — Schedule a post\n"
         "*reply* — Auto-reply to comments\n"
         "*ai image* — Generate an AI image\n"
-        "*avatar video* — Create a video with your face & voice\n"
-        "*avatar setup* — Set up / update your avatar profile\n"
-        "*redo voice* — Re-record your voice sample\n"
-        "*pillars* — Set your content pillars (niche lens)\n"
-        "*content idea* — Mine, grade & expand a content idea\n"
+        "*video* — Create avatar videos & content (pillars, idea mining, Reels)\n"
         "*stats* — View your stats\n"
         "*credits* — Check credit balance\n"
         "*buy* — Purchase credit packs\n"

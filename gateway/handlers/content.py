@@ -1,20 +1,18 @@
 """
-Content Intelligence Pipeline — WhatsApp flow handlers.
+Video / Content Intelligence Pipeline — WhatsApp flow handlers.
 
-Commands:
-  pillars        — Set / update content pillars (1 main + 2 sub)
-  content idea   — Full pipeline: mine → grade → expand → produce
+Single entry point: 'video' command.
 
-Pipeline:
-  1. Pillars setup  → stored once, reused as niche lens for all ideas
-  2. Idea Mining    → URL scrape (Jina AI) or paste text
-  3. Idea Grading   → Claude scores virality / originality / pillar alignment
-  4. User sees scores, chooses to expand or re-mine
-  5. Format choice  → Reel / Carousel / Text Post / B-roll
-  6. Expand         → Claude generates format-specific content
-  7. User approves or re-generates
-  8. If Reel: feeds into avatar video pipeline (requires avatar setup)
-     If other: sends to post pipeline (or just delivers copy)
+State machine:
+  - Fully set up (pillars + avatar) → show menu: New Idea / Update Pillars / Redo Voice
+  - Pillars missing                 → pillar setup flow (3 steps)
+  - Avatar missing                  → avatar setup flow (photo → voice clone)
+  - After pillars: idea mining → grade → format choice → expand → produce
+
+Sub-flows accessible from the menu:
+  New Idea       → AWAITING_IDEA_SOURCE     (pillar-aware idea pipeline)
+  Update Pillars → AWAITING_PILLAR_MAIN     (re-set pillars)
+  Redo Voice     → AWAITING_AVATAR_VOICE_SAMPLE (re-clone voice)
 """
 
 from __future__ import annotations
@@ -31,33 +29,83 @@ logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
-# PILLAR SETUP — entry point
+# UNIFIED VIDEO ENTRY POINT
 # ===========================================================================
 
-async def handle_pillars(db: BotDatabase, sender: str, text: str):
-    """Entry point for 'pillars' command — set or update content pillars."""
-    existing = db.get_content_pillars(sender)
+async def handle_video(db: BotDatabase, sender: str, text: str):
+    """
+    Single entry for the 'video' command.
+    Routes based on what the user has set up:
+      - No pillars        → pillar setup (required first)
+      - No avatar profile → avatar setup (photo + voice)
+      - Fully set up      → show menu: New Idea / Update Pillars / Redo Voice
+    """
+    pillars = db.get_content_pillars(sender)
+    avatar  = db.get_avatar_profile(sender) or {}
+    has_photo = bool(avatar.get("profile_photo_url"))
+    has_voice = avatar.get("voice_clone_status") == "ready"
 
-    if existing:
+    if not pillars:
         await wa.send_text(
             sender,
-            "*Your current content pillars:*\n\n"
-            f"  Main pillar: *{existing['main_pillar']}*\n"
-            f"  Sub-pillar 1: *{existing['sub_pillar_1']}*\n"
-            f"  Sub-pillar 2: *{existing['sub_pillar_2']}*\n\n"
-            "Type your *new main pillar* to update, or send *cancel* to keep the current ones.\n\n"
-            "_Example: Real Estate_",
-        )
-    else:
-        await wa.send_text(
-            sender,
-            "*Content Pillars Setup* 🏛\n\n"
-            "Your content pillars define the niche lens for all your content ideas.\n\n"
+            "*Video Content Setup — Step 1* 🏛\n\n"
+            "First, let's set your content pillars — the niche lens for all your videos.\n\n"
             "*Step 1 of 3 — Main Pillar*\n"
             "What is the core topic your content revolves around?\n\n"
             "_Examples: Real Estate, Insurance, Interior Design, Personal Finance_",
         )
-    db.set_conversation_state(sender, ConversationState.AWAITING_PILLAR_MAIN, {})
+        db.set_conversation_state(sender, ConversationState.AWAITING_PILLAR_MAIN,
+                                   {"from_video_cmd": True})
+        return
+
+    if not has_photo or not has_voice:
+        missing = []
+        if not has_photo:
+            missing.append("profile photo")
+        if not has_voice:
+            missing.append("voice clone")
+        # Delegate to avatar setup
+        from gateway.handlers.actions import handle_avatar_setup
+        await handle_avatar_setup(db=db, sender=sender, text=text)
+        return
+
+    # Fully set up — show menu
+    await wa.send_interactive_list(
+        sender,
+        f"*Video Content* 🎬\n\n"
+        f"Niche: *{pillars['main_pillar']}* · {pillars['sub_pillar_1']} · {pillars['sub_pillar_2']}\n\n"
+        "What would you like to do?",
+        "Choose Option",
+        [{
+            "title": "Options",
+            "rows": [
+                {"id": "video_new_idea",      "title": "New Content Idea",
+                 "description": "Mine a URL or text → grade → Reel/Post/Carousel"},
+                {"id": "video_update_pillars", "title": "Update Content Pillars",
+                 "description": "Change your niche focus"},
+                {"id": "video_redo_voice",    "title": "Redo Voice Sample",
+                 "description": "Re-clone your AI voice"},
+            ],
+        }],
+    )
+    db.set_conversation_state(sender, ConversationState.AWAITING_VIDEO_MENU, {})
+
+
+# ===========================================================================
+# PILLAR SETUP (called internally from video flow)
+# ===========================================================================
+
+async def _start_pillar_setup(sender: str, data: dict, db: BotDatabase):
+    """Begin pillar setup. data should carry from_video_cmd=True if coming from video."""
+    await wa.send_text(
+        sender,
+        "*Content Pillars Setup* 🏛\n\n"
+        "Your content pillars define the niche lens for all your videos.\n\n"
+        "*Step 1 of 3 — Main Pillar*\n"
+        "What is the core topic your content revolves around?\n\n"
+        "_Examples: Real Estate, Insurance, Interior Design, Personal Finance_",
+    )
+    db.set_conversation_state(sender, ConversationState.AWAITING_PILLAR_MAIN, data)
 
 
 async def handle_pillar_step(db: BotDatabase, sender: str, text: str,
@@ -122,10 +170,11 @@ async def handle_pillar_step(db: BotDatabase, sender: str, text: str,
                 f"  Main: {data['main_pillar']}\n"
                 f"  Sub 1: {data['sub_pillar_1']}\n"
                 f"  Sub 2: {data['sub_pillar_2']}\n\n"
-                "Now send *content idea* to mine and create content.",
+                "Send *video* to create content.",
             )
         elif text == "redo_pillars":
-            db.set_conversation_state(sender, ConversationState.AWAITING_PILLAR_MAIN, {})
+            db.set_conversation_state(sender, ConversationState.AWAITING_PILLAR_MAIN,
+                                       {"from_video_cmd": True})
             await wa.send_text(
                 sender,
                 "*Step 1 of 3 — Main Pillar*\n"
@@ -143,19 +192,55 @@ async def handle_pillar_step(db: BotDatabase, sender: str, text: str,
 
 
 # ===========================================================================
-# CONTENT IDEA PIPELINE — entry point
+# VIDEO MENU STATE HANDLER
 # ===========================================================================
 
-async def handle_content_idea(db: BotDatabase, sender: str, text: str):
-    """Entry point for 'content idea' command."""
-    pillars = db.get_content_pillars(sender)
-    if not pillars:
+async def handle_video_menu_step(db: BotDatabase, sender: str, text: str,
+                                  state: ConversationState, data: dict, **kwargs):
+    """Handle the video menu selection."""
+    if text == "video_new_idea":
+        pillars = db.get_content_pillars(sender)
+        await _start_idea_mining(db, sender, pillars)
+
+    elif text == "video_update_pillars":
+        existing = db.get_content_pillars(sender)
         await wa.send_text(
             sender,
-            "⚠️ You haven't set up your content pillars yet.\n\n"
-            "Send *pillars* to set them up first — it only takes 1 minute.",
+            "*Update Content Pillars*\n\n"
+            f"Current: *{existing['main_pillar']}* · {existing['sub_pillar_1']} · {existing['sub_pillar_2']}\n\n"
+            "*Step 1 of 3 — New Main Pillar*\n"
+            "What should the new main topic be?",
         )
-        return
+        db.set_conversation_state(sender, ConversationState.AWAITING_PILLAR_MAIN,
+                                   {"from_video_cmd": True})
+
+    elif text == "video_redo_voice":
+        from gateway.handlers.actions import _prompt_voice_sample
+        await _prompt_voice_sample(sender)
+        db.set_conversation_state(sender, ConversationState.AWAITING_AVATAR_VOICE_SAMPLE, {})
+
+    else:
+        await wa.send_interactive_list(
+            sender,
+            "Please select an option:",
+            "Choose Option",
+            [{
+                "title": "Options",
+                "rows": [
+                    {"id": "video_new_idea",      "title": "New Content Idea",    "description": "Mine → grade → Reel/Post/Carousel"},
+                    {"id": "video_update_pillars", "title": "Update Pillars",     "description": "Change your niche focus"},
+                    {"id": "video_redo_voice",    "title": "Redo Voice Sample",  "description": "Re-clone your AI voice"},
+                ],
+            }],
+        )
+
+
+# ===========================================================================
+# CONTENT IDEA PIPELINE — internal start
+# ===========================================================================
+
+async def _start_idea_mining(db: BotDatabase, sender: str, pillars: dict):
+    """Begin idea mining flow (called from menu or direct entry)."""
 
     await wa.send_text(
         sender,

@@ -53,6 +53,9 @@ class ConversationState(str, Enum):
     AWAITING_AVATAR_SCRIPT = "awaiting_avatar_script"  # user types their spoken script
     AWAITING_AVATAR_STYLE  = "awaiting_avatar_style"   # user picks Professional/Warm/Luxury
 
+    # Video command top-level menu
+    AWAITING_VIDEO_MENU    = "awaiting_video_menu"      # user picks from video menu
+
     # Content Intelligence Pipeline — pillar setup
     AWAITING_PILLAR_MAIN   = "awaiting_pillar_main"    # user types main content pillar
     AWAITING_PILLAR_SUB1   = "awaiting_pillar_sub1"    # user types sub-pillar 1
