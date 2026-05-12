@@ -95,6 +95,10 @@ async def generate_avatar_video(
         return {"url": video_url, "duration": "auto"}
 
     except Exception as e:
+        err = str(e)
+        if "Exhausted balance" in err or "locked" in err.lower():
+            logger.error("Seed Dance: fal.ai account has no credits — top up at fal.ai/dashboard/billing")
+            return {"error": "billing"}
         logger.error("Seed Dance video generation error: %s", e)
         return None
 

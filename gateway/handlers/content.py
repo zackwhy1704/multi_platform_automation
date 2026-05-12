@@ -735,6 +735,19 @@ async def _handle_reel_style(db: BotDatabase, sender: str, text: str, data: dict
         sent = await wa.send_video(sender, result["url"], caption="Here's your content Reel!")
         if not sent:
             await wa.send_text(sender, f"Your Reel is ready:\n{result['url']}")
+    elif result and result.get("error") == "billing":
+        cost = get_action_cost("ai_video")
+        db.execute_query(
+            "UPDATE users SET credits_remaining = credits_remaining + %s, "
+            "credits_used = GREATEST(credits_used - %s, 0) WHERE phone_number_id = %s",
+            (cost, cost, sender),
+        )
+        await wa.send_text(
+            sender,
+            "❌ *Video generation unavailable* — the video service account is out of credits.\n\n"
+            f"Your *{cost} credits* have been refunded.\n\n"
+            "Please contact support.",
+        )
     else:
         await wa.send_text(
             sender,
