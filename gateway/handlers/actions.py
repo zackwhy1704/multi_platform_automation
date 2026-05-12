@@ -702,7 +702,7 @@ async def handle_avatar_setup(db: BotDatabase, sender: str, text: str):
     """
     Entry point for avatar video setup or re-setup.
     Checks which setup steps are missing and guides the user through them.
-    Called by 'avatar setup' or 'redo voice' commands.
+    Called internally from the 'video' command flow.
     """
     avatar = db.get_avatar_profile(sender) or {}
     has_photo = bool(avatar.get("profile_photo_url"))
@@ -724,8 +724,7 @@ async def handle_avatar_setup(db: BotDatabase, sender: str, text: str):
         await wa.send_text(
             sender,
             "✅ Your avatar profile is already set up!\n\n"
-            "Send *avatar video* to create a video.\n"
-            "Send *redo voice* to re-record your voice sample.",
+            "Send *video* to create a video or update your voice sample.",
         )
 
 
@@ -757,7 +756,7 @@ async def handle_avatar_video(db: BotDatabase, sender: str, text: str):
         await wa.send_text(
             sender,
             f"⚠️ Your avatar profile isn't complete yet. Missing: {', '.join(missing)}.\n\n"
-            "Send *avatar setup* to complete your profile first.",
+            "Send *video* to complete your profile first.",
         )
         return
 
@@ -870,14 +869,14 @@ async def handle_avatar_setup_step(db: BotDatabase, sender: str, text: str,
                 sender,
                 "✅ *Avatar profile complete!*\n\n"
                 "Your face and voice are saved.\n\n"
-                "Send *avatar video* to create your first video.",
+                "Send *video* to create your first video.",
             )
         else:
             db.save_avatar_profile(sender, voice_clone_status="failed")
             await wa.send_text(
                 sender,
                 "❌ Voice cloning failed. Please try again with a clearer recording.\n\n"
-                "Send *avatar setup* to retry.",
+                "Send *video* to retry.",
             )
 
 
@@ -974,7 +973,7 @@ async def handle_avatar_video_step(db: BotDatabase, sender: str, text: str,
             await wa.send_text(
                 sender,
                 "❌ Voice generation failed. Your credits have been used.\n\n"
-                "Send *avatar video* to try again.",
+                "Send *video* to try again.",
             )
             return
 
@@ -997,5 +996,5 @@ async def handle_avatar_video_step(db: BotDatabase, sender: str, text: str,
             await wa.send_text(
                 sender,
                 "❌ Video generation failed. Your credits have been used.\n\n"
-                "Send *avatar video* to try again.",
+                "Send *video* to try again.",
             )

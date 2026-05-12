@@ -577,7 +577,7 @@ async def _deliver_text_content(db: BotDatabase, sender: str, data: dict):
         f"✅ *{format_label} ready!*\n\n"
         f"Copy it below:\n\n"
         f"---\n{content}\n---\n\n"
-        "Send *post* to create a post with this content, or *content idea* to start a new idea.",
+        "Send *post* to create a post with this content, or *video* to start a new idea.",
     )
 
 
@@ -603,7 +603,7 @@ async def _initiate_reel_production(db: BotDatabase, sender: str, data: dict):
         await wa.send_text(
             sender,
             f"⚠️ To produce a Reel you need your avatar profile set up. Missing: {', '.join(missing)}.\n\n"
-            "Send *avatar setup* to complete it, then come back to *content idea*.",
+            "Send *video* to complete your avatar setup first.",
         )
         return
 
@@ -713,7 +713,7 @@ async def _handle_reel_style(db: BotDatabase, sender: str, text: str, data: dict
     if not audio_path:
         await wa.send_text(
             sender,
-            "❌ Voice generation failed. Credits used.\n\nSend *content idea* to try again.",
+            "❌ Voice generation failed. Credits used.\n\nSend *video* to try again.",
         )
         return
 
@@ -738,5 +738,5 @@ async def _handle_reel_style(db: BotDatabase, sender: str, text: str, data: dict
     else:
         await wa.send_text(
             sender,
-            "❌ Video generation failed. Credits used.\n\nSend *content idea* to try again.",
+            "❌ Video generation failed. Credits used.\n\nSend *video* to try again.",
         )
