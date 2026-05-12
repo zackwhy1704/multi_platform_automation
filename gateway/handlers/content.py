@@ -706,8 +706,9 @@ async def _handle_reel_style(db: BotDatabase, sender: str, text: str, data: dict
 
     from services.ai.voice_generator import generate_speech
     from services.ai.video_generator import generate_avatar_video
-    from shared.config import PUBLIC_BASE_URL
+    from shared.config import PUBLIC_BASE_URL, FAL_KEY
     from gateway.media import get_media_public_url
+    import os as _os
 
     audio_path = await asyncio.to_thread(generate_speech, voice_id, script)
     if not audio_path:
@@ -717,8 +718,14 @@ async def _handle_reel_style(db: BotDatabase, sender: str, text: str, data: dict
         )
         return
 
-    audio_filename = os.path.basename(audio_path)
-    audio_url = get_media_public_url(audio_filename, PUBLIC_BASE_URL)
+    # Upload audio to fal.ai CDN — Railway filesystem is ephemeral
+    try:
+        import fal_client as _fal
+        _os.environ["FAL_KEY"] = FAL_KEY
+        audio_url = await asyncio.to_thread(_fal.upload_file, audio_path)
+    except Exception as _e:
+        logger.warning("fal.ai audio upload failed, falling back to local URL: %s", _e)
+        audio_url = get_media_public_url(_os.path.basename(audio_path), PUBLIC_BASE_URL)
 
     try:
         result = await generate_avatar_video(photo_url, audio_url, style=style)

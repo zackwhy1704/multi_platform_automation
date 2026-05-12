@@ -829,10 +829,21 @@ async def handle_avatar_setup_step(db: BotDatabase, sender: str, text: str,
             await wa.send_text(sender, "Please send a photo (not a document or video).")
             return
 
-        from gateway.media import get_media_public_url
-        from shared.config import PUBLIC_BASE_URL
-        photo_url = get_media_public_url(media_info["filename"], PUBLIC_BASE_URL)
+        # Upload to fal.ai CDN for a permanent URL (Railway filesystem is ephemeral)
+        await wa.send_text(sender, "⏳ Saving your photo...")
+        try:
+            import os as _os
+            import fal_client as _fal
+            _os.environ["FAL_KEY"] = __import__("shared.config", fromlist=["FAL_KEY"]).FAL_KEY
+            photo_url = await asyncio.to_thread(_fal.upload_file, media_info["file_path"])
+        except Exception as _e:
+            logger.warning("fal.ai upload failed, falling back to local URL: %s", _e)
+            from gateway.media import get_media_public_url
+            from shared.config import PUBLIC_BASE_URL
+            photo_url = get_media_public_url(media_info["filename"], PUBLIC_BASE_URL)
+
         db.save_avatar_profile(sender, profile_photo_url=photo_url)
+        logger.info("Avatar photo stored for %s: %s", sender, photo_url[:60])
 
         await _prompt_voice_sample(sender)
         db.set_conversation_state(sender, ConversationState.AWAITING_AVATAR_VOICE_SAMPLE, {})
@@ -965,7 +976,7 @@ async def handle_avatar_video_step(db: BotDatabase, sender: str, text: str,
 
         # Step 1: TTS — generate MP3 from script using cloned voice
         from services.ai.voice_generator import generate_speech
-        from shared.config import PUBLIC_BASE_URL
+        from shared.config import PUBLIC_BASE_URL, FAL_KEY
         from gateway.media import get_media_public_url
 
         audio_path = await asyncio.to_thread(generate_speech, voice_id, script)
@@ -977,8 +988,15 @@ async def handle_avatar_video_step(db: BotDatabase, sender: str, text: str,
             )
             return
 
-        audio_filename = os.path.basename(audio_path)
-        audio_url = get_media_public_url(audio_filename, PUBLIC_BASE_URL)
+        # Upload audio to fal.ai CDN — Railway filesystem is ephemeral
+        try:
+            import fal_client as _fal
+            os.environ["FAL_KEY"] = FAL_KEY
+            audio_url = await asyncio.to_thread(_fal.upload_file, audio_path)
+        except Exception as _e:
+            logger.warning("fal.ai audio upload failed, falling back to local URL: %s", _e)
+            audio_filename = os.path.basename(audio_path)
+            audio_url = get_media_public_url(audio_filename, PUBLIC_BASE_URL)
 
         # Step 2: Seed Dance — animate photo with audio
         from services.ai.video_generator import generate_avatar_video
