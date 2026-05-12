@@ -85,7 +85,13 @@ def get_media_public_url(filename: str, base_url: str) -> str:
 
 
 def _mime_to_ext(mime_type: str) -> str:
-    """Convert MIME type to file extension."""
+    """Convert MIME type to file extension.
+
+    WhatsApp voice notes arrive as 'audio/ogg; codecs=opus' — strip the
+    codecs suffix before lookup so they resolve to .ogg, not .bin.
+    """
+    # Strip codec parameters (e.g. "audio/ogg; codecs=opus" → "audio/ogg")
+    base_mime = mime_type.split(";")[0].strip().lower()
     mapping = {
         "image/jpeg": ".jpg",
         "image/png": ".png",
@@ -98,9 +104,10 @@ def _mime_to_ext(mime_type: str) -> str:
         "audio/mp4": ".m4a",
         "audio/mpeg": ".mp3",
         "audio/ogg": ".ogg",
+        "audio/opus": ".ogg",
         "application/pdf": ".pdf",
     }
-    return mapping.get(mime_type, ".bin")
+    return mapping.get(base_mime, ".bin")
 
 
 def is_image(mime_type: str) -> bool:

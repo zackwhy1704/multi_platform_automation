@@ -44,11 +44,13 @@ def clone_voice(user_label: str, audio_file_path: str) -> Optional[str]:
     """
     try:
         client = _client()
+        filename = os.path.basename(audio_file_path)
         with open(audio_file_path, "rb") as f:
+            # Pass (filename, file_object) so ElevenLabs knows the format
             voice = client.clone(
                 name=user_label,
                 description="User voice clone for avatar video generation",
-                files=[f],
+                files=[(filename, f)],
             )
         voice_id = voice.voice_id
         logger.info("Voice cloned for %s → voice_id: %s", user_label, voice_id)
